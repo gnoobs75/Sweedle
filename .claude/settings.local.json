@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch",
+      "Bash(mkdir:*)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(npm install)",
+      "Bash(cat:*)",
+      "Bash(py:*)",
+      "Bash(where:*)",
+      "Bash(curl:*)",
+      "Bash(npm run build:*)",
+      "Bash(pushd \"C:\\\\Claude\\\\Sweedle\\\\frontend\")",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(..backendvenvScriptspython.exe -m uvicorn src.main:app --host 127.0.0.1 --port 8000)",
+      "Bash(cd:*)",
+      "Bash(C:ClaudeSweedlebackendvenvScriptspython.exe -c \"from src.assets.router import router; print\\(''Assets router OK''\\)\")",
+      "Bash(C:/Claude/Sweedle/backend/venv/Scripts/python.exe:*)",
+      "Bash(python:*)",
+      "Bash(venvScriptspython.exe -m uvicorn src.main:app --host 127.0.0.1 --port 8000)",
+      "Bash(xargs:*)",
+      "Bash(ls -la \"C:\\\\Claude\\\\Sweedle\\\\frontend\\\\public\"\" 2>/dev/null || echo \"No public directory found \")",
+      "Bash(copy \"C:\\\\Claude\\\\Sweedle\\\\frontend\\\\public\\\\favicon.svg\" \"C:\\\\Claude\\\\Sweedle\\\\src-tauri\\\\icons\\\\icon.svg\")",
+      "Bash(cargo build:*)",
+      "Bash(backendvenvScriptspython.exe -c \"\nfrom PIL import Image, ImageDraw\nimport os\n\n# Create a simple icon since we can''t easily convert SVG\nsizes = [16, 32, 48, 256]\nicons_dir = ''src-tauri/icons''\n\n# Create a gradient-like icon matching the app theme\ndef create_icon\\(size\\):\n    img = Image.new\\(''RGBA'', \\(size, size\\), \\(26, 26, 46, 255\\)\\)  # #1a1a2e background\n    draw = ImageDraw.Draw\\(img\\)\n    \n    # Draw a hexagon-like shape\n    center = size // 2\n    radius = int\\(size * 0.35\\)\n    \n    # Draw outer glow/border in primary color\n    for i in range\\(3\\):\n        r = radius + i\n        points = []\n        for j in range\\(6\\):\n            import math\n            angle = math.pi / 6 + j * math.pi / 3\n            x = center + int\\(r * math.cos\\(angle\\)\\)\n            y = center + int\\(r * math.sin\\(angle\\)\\)\n            points.append\\(\\(x, y\\)\\)\n        draw.polygon\\(points, outline=\\(99, 102, 241, 255\\)\\)  # #6366f1 primary\n    \n    # Draw center dot\n    dot_radius = max\\(2, size // 16\\)\n    draw.ellipse\\([center - dot_radius, center - dot_radius, \n                  center + dot_radius, center + dot_radius], \n                 fill=\\(34, 211, 238, 255\\)\\)  # #22d3ee accent\n    \n    return img\n\n# Generate PNG files\nfor size in sizes:\n    img = create_icon\\(size\\)\n    if size == 256:\n        img.save\\(os.path.join\\(icons_dir, ''128x128@2x.png''\\)\\)\n    elif size == 128:\n        img.save\\(os.path.join\\(icons_dir, ''128x128.png''\\)\\)\n    elif size == 32:\n        img.save\\(os.path.join\\(icons_dir, ''32x32.png''\\)\\)\n\n# Create ICO file with multiple sizes\nico_images = [create_icon\\(s\\) for s in [16, 32, 48, 256]]\nico_images[0].save\\(os.path.join\\(icons_dir, ''icon.ico''\\), format=''ICO'', sizes=[\\(s, s\\) for s in [16, 32, 48, 256]]\\)\n\n# Also save 128x128\ncreate_icon\\(128\\).save\\(os.path.join\\(icons_dir, ''128x128.png''\\)\\)\n\nprint\\(''Icons created successfully!''\\)\nprint\\(''Files:'', os.listdir\\(icons_dir\\)\\)\n\")",
+      "Bash(cargo tauri build:*)",
+      "Bash(RUST_LOG=debug cargo run:*)",
+      "Bash(cargo run)",
+      "Bash(git init:*)",
+      "Bash(git remote add:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

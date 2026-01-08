@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Python
+backend/venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# Build outputs
+frontend/dist/
+src-tauri/target/
+
+# Database
+backend/data/*.db
+
+# Storage (generated assets)
+backend/storage/generated/
+
+# Environment files with secrets
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Cache
+.cache/
+*.cache
+
+# Tauri
+src-tauri/WixTools/
+src-tauri/NSIS/
