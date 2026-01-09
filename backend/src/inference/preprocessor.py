@@ -25,8 +25,28 @@ class ImagePreprocessor:
         """
         self._model_name = model_name
         self._session = None
-        self._executor = ThreadPoolExecutor(max_workers=2)
+        self._executor = ThreadPoolExecutor(max_workers=4)  # Increased for parallelism
         self._initialized = False
+
+    async def initialize(self) -> None:
+        """Eagerly initialize the rembg session.
+
+        Call this at startup to avoid the first-image delay.
+        The rembg model (U2Net ~170MB) will be loaded into memory.
+        """
+        if self._initialized:
+            return
+
+        logger.info("Initializing rembg session (eager load)...")
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(self._executor, self._get_session)
+
+        if self._session is not None:
+            logger.info(f"rembg session initialized with model: {self._model_name}")
+            self._initialized = True
+        else:
+            logger.warning("rembg session initialization failed (background removal will be skipped)")
 
     def _get_session(self):
         """Lazy initialization of rembg session."""

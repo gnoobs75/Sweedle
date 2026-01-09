@@ -11,6 +11,7 @@ from typing import Callable, Optional, Union
 from PIL import Image
 
 from src.config import settings
+from src.core.device import DeviceManager, get_default_device
 from src.inference.config import GenerationConfig, OutputFormat
 from src.inference.preprocessor import ImagePreprocessor
 
@@ -52,21 +53,33 @@ class Hunyuan3DPipeline:
         Args:
             model_path: HuggingFace model path or local path
             subfolder: Model subfolder
-            device: Device to use (cuda, cpu)
+            device: Device to use (cuda, mps, cpu, or auto)
             low_vram_mode: Enable memory optimizations
         """
         self.model_path = model_path or settings.HUNYUAN_MODEL_PATH
         self.subfolder = subfolder or settings.HUNYUAN_SUBFOLDER
-        self.device = device or settings.DEVICE
+
+        # Use device manager for cross-platform support
+        device_pref = device or settings.DEVICE
+        if device_pref == "auto":
+            self.device = get_default_device()
+        else:
+            self.device = device_pref
+
         self.low_vram_mode = low_vram_mode if low_vram_mode is not None else settings.LOW_VRAM_MODE
+
+        # Initialize device manager for utility methods
+        self._device_manager = DeviceManager()
 
         self._shape_pipeline = None
         self._texture_pipeline = None
         self._preprocessor = ImagePreprocessor()
-        self._executor = ThreadPoolExecutor(max_workers=1)
+        self._executor = ThreadPoolExecutor(max_workers=settings.PREPROCESSING_WORKERS)
         self._initialized = False
         self._torch_available = False
         self._lock = asyncio.Lock()
+
+        logger.info(f"Pipeline configured for device: {self.device}")
 
     @property
     def is_initialized(self) -> bool:
@@ -86,8 +99,14 @@ class Hunyuan3DPipeline:
             # after the executor returned
             self._load_models()
 
+            # Run model warmup to avoid cold start penalty
+            if settings.ENABLE_MODEL_WARMUP and self._shape_pipeline is not None:
+                logger.info("Running model warmup...")
+                self._warmup_model()
+                logger.info("Model warmup complete")
+
             self._initialized = True
-            logger.info(f"Hunyuan3D pipeline initialized - pipeline is None: {self._shape_pipeline is None}, id(self): {id(self)}")
+            logger.info(f"Hunyuan3D pipeline initialized on {self.device} - pipeline is None: {self._shape_pipeline is None}")
 
     def _load_models(self) -> None:
         """Synchronous model loading."""
@@ -95,11 +114,18 @@ class Hunyuan3DPipeline:
             import torch
             self._torch_available = True
 
+            # Determine dtype based on device and low_vram_mode
+            # MPS works better with float32 in PyTorch 2.x
+            if self.device == "mps":
+                dtype = torch.float32
+            elif self.low_vram_mode:
+                dtype = torch.float16
+            else:
+                dtype = torch.float32
+
             # Try to import Hunyuan3D
             try:
                 from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
-
-                dtype = torch.float16 if self.low_vram_mode else torch.float32
 
                 # Try loading - hy3dgen will auto-download and handle model files
                 try:
@@ -117,12 +143,22 @@ class Hunyuan3DPipeline:
                         torch_dtype=dtype,
                     )
 
-                if self.device == "cuda" and torch.cuda.is_available():
-                    # Note: Don't reassign - hy3dgen's .to() returns None instead of self
-                    self._shape_pipeline.to(self.device)
-                    logger.info(f"Shape model loaded on CUDA device")
+                # Move model to device (CUDA or MPS)
+                if self.device in ("cuda", "mps"):
+                    device_available = (
+                        (self.device == "cuda" and torch.cuda.is_available()) or
+                        (self.device == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available())
+                    )
 
-                logger.info(f"Loaded shape pipeline from {self.model_path}")
+                    if device_available:
+                        # Note: Don't reassign - hy3dgen's .to() returns None instead of self
+                        self._shape_pipeline.to(self.device)
+                        logger.info(f"Model loaded on {self.device.upper()} device")
+                    else:
+                        logger.warning(f"{self.device.upper()} requested but not available, using CPU")
+                        self.device = "cpu"
+
+                logger.info(f"Loaded shape pipeline from {self.model_path} (dtype: {dtype})")
 
                 # Try to load texture pipeline
                 # Note: Texture models are in Hunyuan3D-2 repo, not Hunyuan3D-2.1
@@ -142,6 +178,7 @@ class Hunyuan3DPipeline:
                     self._texture_pipeline = None
 
                 logger.info(f"_load_models END - shape pipeline: {self._shape_pipeline is not None}, texture pipeline: {self._texture_pipeline is not None}")
+                # Return early to avoid any exception handlers resetting the pipeline
                 return
 
             except ImportError:
@@ -176,6 +213,53 @@ class Hunyuan3DPipeline:
         except Exception as e:
             logger.error(f"Unexpected error loading models: {e}")
             self._shape_pipeline = None
+
+    def _warmup_model(self) -> None:
+        """Run a quick warmup inference to avoid cold start penalty.
+
+        The first inference after model loading is slower due to:
+        - CUDA kernel compilation
+        - Memory allocation
+        - Model optimization
+
+        Running a minimal warmup pass eliminates this penalty for real jobs.
+        """
+        if self._shape_pipeline is None:
+            return
+
+        try:
+            import torch
+            import numpy as np
+
+            # Create a small dummy image
+            dummy_image = Image.new('RGBA', (512, 512), (128, 128, 128, 255))
+
+            # Use minimal settings for fast warmup
+            generator = None
+            if self.device != "cpu":
+                # MPS doesn't support Generator with device parameter
+                gen_device = "cpu" if self.device == "mps" else self.device
+                generator = torch.Generator(device=gen_device)
+                generator.manual_seed(42)
+
+            # Run a quick inference (minimal steps)
+            _ = self._shape_pipeline(
+                image=dummy_image,
+                num_inference_steps=1,  # Minimal steps for warmup
+                guidance_scale=5.5,
+                octree_resolution=128,  # Low resolution for speed
+                generator=generator,
+                output_type='trimesh',
+            )
+
+            # Clear the warmup result from memory
+            self._device_manager.empty_cache()
+
+            logger.info("Model warmup completed successfully")
+
+        except Exception as e:
+            logger.warning(f"Model warmup failed (non-fatal): {e}")
+            # Warmup failure is not critical, continue anyway
 
     async def generate(
         self,
@@ -321,7 +405,10 @@ class Hunyuan3DPipeline:
 
             generator = None
             if config.seed is not None:
-                generator = torch.Generator(device=self.device)
+                # MPS doesn't support Generator with device parameter
+                # Use CPU generator for MPS, which still provides deterministic results
+                gen_device = "cpu" if self.device == "mps" else self.device
+                generator = torch.Generator(device=gen_device)
                 generator.manual_seed(config.seed)
 
             # Run shape generation
@@ -461,13 +548,8 @@ class Hunyuan3DPipeline:
                 del self._texture_pipeline
                 self._texture_pipeline = None
 
-            # Clear CUDA cache
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except (ImportError, Exception):
-                pass
+            # Clear GPU cache (CUDA or MPS)
+            self._device_manager.empty_cache()
 
             self._initialized = False
             if self._preprocessor:
@@ -475,7 +557,7 @@ class Hunyuan3DPipeline:
             if self._executor:
                 self._executor.shutdown(wait=False)
 
-            logger.info("Hunyuan3D pipeline cleaned up")
+            logger.info(f"Hunyuan3D pipeline cleaned up (device: {self.device})")
 
 
 # Global pipeline instance (singleton)

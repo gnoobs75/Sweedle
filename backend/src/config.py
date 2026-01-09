@@ -5,6 +5,29 @@ from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _get_default_device() -> str:
+    """Auto-detect the best available compute device.
+
+    Priority: CUDA (NVIDIA) → MPS (Apple Silicon) → CPU
+
+    Returns:
+        Device string: "cuda", "mps", or "cpu"
+    """
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+        else:
+            return "cpu"
+    except ImportError:
+        return "cpu"
+    except Exception:
+        return "cpu"
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
@@ -36,7 +59,23 @@ class Settings(BaseSettings):
     HUNYUAN_MODEL_PATH: str = "tencent/Hunyuan3D-2.1"
     HUNYUAN_SUBFOLDER: str = "hunyuan3d-dit-v2-1"
     LOW_VRAM_MODE: bool = False
-    DEVICE: str = "cuda"
+    DEVICE: str = "auto"  # "auto", "cuda", "mps", or "cpu"
+
+    # Performance settings
+    ENABLE_MODEL_WARMUP: bool = True  # Warmup model on startup to avoid cold start
+    PREPROCESSING_WORKERS: int = 4  # Parallel preprocessing threads
+    ENABLE_PREPROCESSING_OVERLAP: bool = True  # Preprocess next job during GPU work
+
+    @property
+    def compute_device(self) -> str:
+        """Get the actual compute device to use.
+
+        If DEVICE is "auto", auto-detect the best available device.
+        Otherwise, use the specified device.
+        """
+        if self.DEVICE == "auto":
+            return _get_default_device()
+        return self.DEVICE
 
     # Default generation parameters
     DEFAULT_INFERENCE_STEPS: int = 30

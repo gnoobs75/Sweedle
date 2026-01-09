@@ -108,7 +108,10 @@ app.mount(
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
+    from src.core.device import get_device_info
+
     queue_status = app.state.job_queue.get_status() if app.state.job_queue else {}
+    device_info = get_device_info()
 
     return {
         "status": "healthy",
@@ -117,6 +120,25 @@ async def health_check():
         "worker_running": app.state.worker.is_running if app.state.worker else False,
         "queue_size": queue_status.get("queue_size", 0),
         "websocket_connections": app.state.ws_manager.connection_count if app.state.ws_manager else 0,
+        "device": device_info,
+    }
+
+
+# Device info endpoint
+@app.get("/api/device/info")
+async def device_info():
+    """Get detailed device information."""
+    from src.core.device import get_device_info, DeviceManager
+
+    info = get_device_info()
+    manager = DeviceManager()
+
+    return {
+        **info,
+        "configured_device": settings.DEVICE,
+        "effective_device": settings.compute_device,
+        "preprocessing_overlap_enabled": settings.ENABLE_PREPROCESSING_OVERLAP,
+        "model_warmup_enabled": settings.ENABLE_MODEL_WARMUP,
     }
 
 
