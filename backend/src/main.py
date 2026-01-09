@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
 
-from src.config import settings
+from src.config import settings, apply_gpu_optimizations
 from src.database import init_db
 
 # Frontend build directory
@@ -43,6 +43,14 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler for startup and shutdown events."""
     # Startup
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
+
+    # Apply GPU optimizations BEFORE loading any models
+    logger.info("Applying GPU optimizations...")
+    gpu_opts = apply_gpu_optimizations()
+    if gpu_opts.get("gpu"):
+        logger.info(f"GPU optimizations applied: TF32={gpu_opts.get('tf32')}, "
+                   f"dtype={gpu_opts.get('dtype')}, cuDNN={gpu_opts.get('cudnn_benchmark')}")
+    app.state.gpu_optimizations = gpu_opts
 
     # Ensure directories exist
     settings.ensure_directories()

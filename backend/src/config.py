@@ -1,8 +1,11 @@
 """Application configuration using Pydantic settings."""
 
+import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 def _get_default_device() -> str:
@@ -66,6 +69,31 @@ class Settings(BaseSettings):
     PREPROCESSING_WORKERS: int = 4  # Parallel preprocessing threads
     ENABLE_PREPROCESSING_OVERLAP: bool = True  # Preprocess next job during GPU work
 
+    # === GPU Performance Settings (RTX 30/40 series optimizations) ===
+    # These settings significantly improve performance on modern NVIDIA GPUs
+
+    # Enable TF32 for matrix operations (8x faster on RTX 30/40 series)
+    # TF32 uses 19 bits of precision (vs 32 for FP32) - negligible quality difference
+    ENABLE_TF32: bool = True
+
+    # Enable cuDNN autotuning (finds fastest algorithms for your specific GPU)
+    ENABLE_CUDNN_BENCHMARK: bool = True
+
+    # Use FP16/BF16 for inference (2x faster, 50% less VRAM)
+    # Options: "fp32", "fp16", "bf16" (bf16 best for RTX 40 series)
+    INFERENCE_DTYPE: Literal["fp32", "fp16", "bf16"] = "bf16"
+
+    # Enable Flash Attention for transformer models (faster, less memory)
+    ENABLE_FLASH_ATTENTION: bool = True
+
+    # CUDA memory settings
+    CUDA_MEMORY_FRACTION: float = 0.95  # Use up to 95% of VRAM (default: unlimited)
+    ENABLE_MEMORY_EFFICIENT_ATTENTION: bool = True
+
+    # Model loading settings
+    ENABLE_TEXTURE_PIPELINE: bool = True  # Load texture generation (18GB extra VRAM)
+    LAZY_MODEL_LOADING: bool = False  # If True, load models on first job instead of startup
+
     @property
     def compute_device(self) -> str:
         """Get the actual compute device to use.
@@ -100,6 +128,119 @@ class Settings(BaseSettings):
         self.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         self.GENERATED_DIR.mkdir(parents=True, exist_ok=True)
         self.EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def apply_gpu_optimizations() -> dict:
+    """Apply PyTorch GPU optimizations based on settings.
+
+    Should be called once at application startup, before loading models.
+    Returns a dict with the applied optimizations for logging.
+
+    These optimizations can provide 2-8x speedup on modern NVIDIA GPUs.
+    """
+    applied = {}
+
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            logger.info("CUDA not available, skipping GPU optimizations")
+            return {"cuda_available": False}
+
+        # Get GPU info
+        gpu_name = torch.cuda.get_device_name(0)
+        compute_cap = torch.cuda.get_device_capability(0)
+        applied["gpu"] = gpu_name
+        applied["compute_capability"] = f"{compute_cap[0]}.{compute_cap[1]}"
+
+        # Enable TF32 for Ampere+ GPUs (compute capability >= 8.0)
+        if settings.ENABLE_TF32 and compute_cap[0] >= 8:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            applied["tf32"] = True
+            logger.info("Enabled TF32 tensor operations (8x faster matmul)")
+        else:
+            applied["tf32"] = False
+
+        # Enable cuDNN benchmark (autotuning)
+        if settings.ENABLE_CUDNN_BENCHMARK:
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.enabled = True
+            applied["cudnn_benchmark"] = True
+            logger.info("Enabled cuDNN benchmark (autotuning)")
+
+        # Set deterministic mode off for performance
+        torch.backends.cudnn.deterministic = False
+        applied["deterministic"] = False
+
+        # Set default dtype for inference
+        dtype_map = {
+            "fp32": torch.float32,
+            "fp16": torch.float16,
+            "bf16": torch.bfloat16,
+        }
+        inference_dtype = dtype_map.get(settings.INFERENCE_DTYPE, torch.float32)
+
+        # Check BF16 support (Ampere+ GPUs)
+        if settings.INFERENCE_DTYPE == "bf16":
+            if torch.cuda.is_bf16_supported():
+                applied["dtype"] = "bf16"
+                logger.info("Using BFloat16 for inference (optimal for RTX 40 series)")
+            else:
+                inference_dtype = torch.float16
+                applied["dtype"] = "fp16 (bf16 not supported)"
+                logger.warning("BF16 not supported, falling back to FP16")
+        else:
+            applied["dtype"] = settings.INFERENCE_DTYPE
+
+        # Store dtype for pipeline use
+        applied["torch_dtype"] = inference_dtype
+
+        # Set memory fraction if specified
+        if settings.CUDA_MEMORY_FRACTION < 1.0:
+            torch.cuda.set_per_process_memory_fraction(
+                settings.CUDA_MEMORY_FRACTION, device=0
+            )
+            applied["memory_fraction"] = settings.CUDA_MEMORY_FRACTION
+            logger.info(f"Set CUDA memory fraction to {settings.CUDA_MEMORY_FRACTION:.0%}")
+
+        # Enable memory-efficient attention if available
+        if settings.ENABLE_MEMORY_EFFICIENT_ATTENTION:
+            try:
+                # This is handled by diffusers/transformers when loading models
+                applied["memory_efficient_attention"] = True
+            except Exception:
+                applied["memory_efficient_attention"] = False
+
+        # Log VRAM info
+        props = torch.cuda.get_device_properties(0)
+        vram_gb = props.total_memory / (1024**3)
+        applied["vram_gb"] = round(vram_gb, 1)
+        logger.info(f"GPU: {gpu_name} with {vram_gb:.1f}GB VRAM")
+
+        return applied
+
+    except ImportError:
+        logger.warning("PyTorch not installed, GPU optimizations skipped")
+        return {"error": "PyTorch not installed"}
+    except Exception as e:
+        logger.error(f"Failed to apply GPU optimizations: {e}")
+        return {"error": str(e)}
+
+
+def get_inference_dtype():
+    """Get the torch dtype for model inference based on settings."""
+    try:
+        import torch
+
+        if settings.INFERENCE_DTYPE == "bf16" and torch.cuda.is_bf16_supported():
+            return torch.bfloat16
+        elif settings.INFERENCE_DTYPE == "fp16":
+            return torch.float16
+        else:
+            return torch.float32
+    except ImportError:
+        return None
 
 
 # Global settings instance

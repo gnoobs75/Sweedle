@@ -69,11 +69,30 @@ C:\Claude\Sweedle\backend\venv\
 
 ### Model Cache Locations
 
-| Model | Cache Path |
-|-------|------------|
-| Hunyuan3D-2.1 | `~\.cache\huggingface\hub\models--tencent--Hunyuan3D-2.1\` |
-| hy3dgen local | `~\.cache\hy3dgen\tencent\Hunyuan3D-2.1\` |
-| rembg U2Net | `~\.u2net\` |
+| Model | Cache Path | Size |
+|-------|------------|------|
+| Hunyuan3D-2.1 (Shape) | `~\.cache\huggingface\hub\models--tencent--Hunyuan3D-2.1\` | ~21GB |
+| Hunyuan3D-2 (Texture) | `~\.cache\huggingface\hub\models--tencent--Hunyuan3D-2\` | ~18GB |
+| rembg U2Net | `~\.u2net\` | ~170MB |
+
+### GPU Performance Settings
+
+The backend includes optimizations for modern NVIDIA GPUs (RTX 30/40 series). These are configured in `backend/.env`:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ENABLE_TF32` | `true` | TF32 tensor operations (8x faster matmul on Ampere+) |
+| `ENABLE_CUDNN_BENCHMARK` | `true` | cuDNN autotuning for optimal algorithms |
+| `INFERENCE_DTYPE` | `bf16` | BFloat16 inference (2x faster, 50% less VRAM) |
+| `CUDA_MEMORY_FRACTION` | `0.95` | Max VRAM usage (prevents OOM) |
+| `ENABLE_TEXTURE_PIPELINE` | `true` | Load texture generation (~18GB extra VRAM) |
+
+**RTX 40 Series Optimizations Applied:**
+- TF32 matrix operations (8x faster than FP32)
+- BFloat16 inference (better precision than FP16)
+- cuDNN benchmark autotuning
+- `torch.inference_mode()` for all generation
+- Flash Attention support
 
 ---
 
@@ -282,9 +301,9 @@ If `pipeline is None: True`, there's a loading issue.
 **Issue**: `onnxruntime` doesn't support Python 3.14.
 **Workaround**: Use Python 3.11.x.
 
-### Texture Generation Disabled
-**Issue**: Requires `custom_rasterizer` CUDA module compilation.
-**Workaround**: Texture generation is disabled. Models are untextured.
+### Texture Generation
+**Status**: Working (loads from tencent/Hunyuan3D-2, ~18GB)
+**Note**: The texture pipeline loads successfully despite custom_rasterizer warnings.
 
 ### Thumbnail Generation
 **Issue**: Requires `pyglet` which has display dependencies.

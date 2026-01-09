@@ -10,7 +10,7 @@ from typing import Callable, Optional, Union
 
 from PIL import Image
 
-from src.config import settings
+from src.config import settings, get_inference_dtype
 from src.core.device import DeviceManager, get_default_device
 from src.inference.config import GenerationConfig, OutputFormat
 from src.inference.preprocessor import ImagePreprocessor
@@ -114,14 +114,18 @@ class Hunyuan3DPipeline:
             import torch
             self._torch_available = True
 
-            # Determine dtype based on device and low_vram_mode
-            # MPS works better with float32 in PyTorch 2.x
+            # Determine dtype based on config settings (optimized for GPU)
+            # Priority: config INFERENCE_DTYPE > low_vram_mode > device default
             if self.device == "mps":
+                # MPS works better with float32 in PyTorch 2.x
                 dtype = torch.float32
-            elif self.low_vram_mode:
-                dtype = torch.float16
             else:
-                dtype = torch.float32
+                # Use optimized dtype from config (bf16 for RTX 40 series)
+                dtype = get_inference_dtype()
+                if dtype is None:
+                    dtype = torch.float16 if self.low_vram_mode else torch.float32
+
+            logger.info(f"Loading models with dtype: {dtype}")
 
             # Try to import Hunyuan3D
             try:
@@ -160,21 +164,33 @@ class Hunyuan3DPipeline:
 
                 logger.info(f"Loaded shape pipeline from {self.model_path} (dtype: {dtype})")
 
-                # Try to load texture pipeline
+                # Try to load texture pipeline (optional, controlled by config)
                 # Note: Texture models are in Hunyuan3D-2 repo, not Hunyuan3D-2.1
-                try:
-                    from hy3dgen.texgen import Hunyuan3DPaintPipeline
-                    texture_model_path = "tencent/Hunyuan3D-2"
-                    self._texture_pipeline = Hunyuan3DPaintPipeline.from_pretrained(
-                        texture_model_path,
-                        subfolder='hunyuan3d-paint-v2-0-turbo'
-                    )
-                    logger.info("Loaded texture pipeline (Hunyuan3D-Paint) from tencent/Hunyuan3D-2")
-                except ImportError as e:
-                    logger.warning(f"Texture pipeline import failed: {e}. Texture generation disabled.")
-                    self._texture_pipeline = None
-                except Exception as e:
-                    logger.warning(f"Failed to load texture pipeline: {e}. Texture generation disabled.")
+                if settings.ENABLE_TEXTURE_PIPELINE:
+                    try:
+                        from hy3dgen.texgen import Hunyuan3DPaintPipeline
+                        texture_model_path = "tencent/Hunyuan3D-2"
+                        logger.info("Loading texture pipeline (18GB)...")
+                        self._texture_pipeline = Hunyuan3DPaintPipeline.from_pretrained(
+                            texture_model_path,
+                            subfolder='hunyuan3d-paint-v2-0-turbo'
+                        )
+                        # Move texture pipeline to GPU if available
+                        if self.device in ("cuda", "mps") and hasattr(self._texture_pipeline, 'to'):
+                            try:
+                                self._texture_pipeline.to(self.device)
+                                logger.info(f"Texture pipeline moved to {self.device.upper()}")
+                            except Exception as e:
+                                logger.warning(f"Could not move texture pipeline to GPU: {e}")
+                        logger.info("Loaded texture pipeline (Hunyuan3D-Paint) from tencent/Hunyuan3D-2")
+                    except ImportError as e:
+                        logger.warning(f"Texture pipeline import failed: {e}. Texture generation disabled.")
+                        self._texture_pipeline = None
+                    except Exception as e:
+                        logger.warning(f"Failed to load texture pipeline: {e}. Texture generation disabled.")
+                        self._texture_pipeline = None
+                else:
+                    logger.info("Texture pipeline disabled by config (ENABLE_TEXTURE_PIPELINE=False)")
                     self._texture_pipeline = None
 
                 logger.info(f"_load_models END - shape pipeline: {self._shape_pipeline is not None}, texture pipeline: {self._texture_pipeline is not None}")
@@ -393,7 +409,7 @@ class Hunyuan3DPipeline:
         config: GenerationConfig,
         progress_callback: Optional[Callable] = None,
     ):
-        """Synchronous shape generation."""
+        """Synchronous shape generation with GPU optimizations."""
         logger.info(f"_generate_shape called - pipeline is None: {self._shape_pipeline is None}, initialized: {self._initialized}, id(self): {id(self)}")
         if self._shape_pipeline is None:
             # Mock mode - create a simple placeholder mesh
@@ -411,15 +427,18 @@ class Hunyuan3DPipeline:
                 generator = torch.Generator(device=gen_device)
                 generator.manual_seed(config.seed)
 
-            # Run shape generation
-            result = self._shape_pipeline(
-                image=image,
-                num_inference_steps=config.inference_steps,
-                guidance_scale=config.guidance_scale,
-                octree_resolution=config.octree_resolution,
-                generator=generator,
-                output_type='trimesh',
-            )
+            # Use inference_mode for optimal performance (faster than no_grad)
+            # This disables gradient computation and view tracking
+            with torch.inference_mode():
+                # Run shape generation
+                result = self._shape_pipeline(
+                    image=image,
+                    num_inference_steps=config.inference_steps,
+                    guidance_scale=config.guidance_scale,
+                    octree_resolution=config.octree_resolution,
+                    generator=generator,
+                    output_type='trimesh',
+                )
 
             mesh = result[0] if isinstance(result, (list, tuple)) else result
 
@@ -439,7 +458,7 @@ class Hunyuan3DPipeline:
         config: GenerationConfig,
         progress_callback: Optional[Callable] = None,
     ):
-        """Synchronous texture generation using Hunyuan3D-Paint."""
+        """Synchronous texture generation using Hunyuan3D-Paint with GPU optimizations."""
         if self._texture_pipeline is None:
             logger.info("Texture pipeline not available - returning untextured mesh")
             if progress_callback:
@@ -447,16 +466,20 @@ class Hunyuan3DPipeline:
             return mesh
 
         try:
+            import torch
+
             logger.info("Starting texture generation with Hunyuan3D-Paint...")
             if progress_callback:
                 progress_callback(0.1, "Preparing texture generation...")
 
-            # Run texture generation
-            # The paint pipeline takes mesh and image, returns textured mesh
-            textured_mesh = self._texture_pipeline(
-                mesh=mesh,
-                image=image,
-            )
+            # Use inference_mode for optimal performance
+            with torch.inference_mode():
+                # Run texture generation
+                # The paint pipeline takes mesh and image, returns textured mesh
+                textured_mesh = self._texture_pipeline(
+                    mesh=mesh,
+                    image=image,
+                )
 
             if progress_callback:
                 progress_callback(1.0, "Texture generation complete")
