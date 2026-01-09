@@ -6,8 +6,10 @@ import { apiClient } from './client';
 import type { Asset, Tag, AssetListResponse } from '../../types';
 
 // Detect if running in Tauri (check at runtime, not module load)
+// Tauri v2 uses __TAURI_INTERNALS__, v1 used __TAURI__
 function isTauri(): boolean {
-  return typeof window !== 'undefined' && '__TAURI__' in window;
+  return typeof window !== 'undefined' &&
+    ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
 }
 
 // Storage base URL - in Tauri, use localhost directly

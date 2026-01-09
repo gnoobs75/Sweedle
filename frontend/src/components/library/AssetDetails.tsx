@@ -114,9 +114,42 @@ export function AssetDetails({ asset, onClose, className }: AssetDetailsProps) {
     openModal('export', { assetId: asset.id });
   }, [asset.id, openModal]);
 
-  const handleDownload = useCallback(() => {
-    window.open(getAssetDownloadUrl(asset.id), '_blank');
-  }, [asset.id]);
+  const handleDownload = useCallback(async () => {
+    try {
+      const url = getAssetDownloadUrl(asset.id);
+
+      // Fetch the file
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error('Failed to download file');
+      }
+
+      // Get the blob
+      const blob = await response.blob();
+
+      // Create download link
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `${asset.name}.glb`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+
+      addNotification({
+        type: 'success',
+        title: 'Download Started',
+        message: `Downloading ${asset.name}.glb`,
+      });
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        title: 'Download Failed',
+        message: error instanceof Error ? error.message : 'Failed to download file',
+      });
+    }
+  }, [asset.id, asset.name, addNotification]);
 
   return (
     <div className={cn('flex flex-col h-full', className)}>

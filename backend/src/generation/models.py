@@ -118,6 +118,13 @@ class Asset(Base):
     is_favorite = Column(Boolean, default=False)
     rating = Column(Integer, nullable=True)
 
+    # Rigging information
+    is_rigged = Column(Boolean, default=False)
+    rigging_data = Column(JSON, nullable=True)  # SkeletonData JSON
+    character_type = Column(String(50), nullable=True)  # humanoid, quadruped
+    rigged_mesh_path = Column(String(500), nullable=True)
+    rigging_processor = Column(String(50), nullable=True)  # unirig, blender
+
     # Relationships
     tags = relationship("Tag", secondary=asset_tags, back_populates="assets")
     projects = relationship("Project", secondary=project_assets, back_populates="assets")

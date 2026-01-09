@@ -8,6 +8,7 @@ import { useUIStore } from '../stores/uiStore';
 import { useQueueStore } from '../stores/queueStore';
 import { useLibraryStore } from '../stores/libraryStore';
 import { useGenerationStore } from '../stores/generationStore';
+import { useRiggingStore } from '../stores/riggingStore';
 import { logger } from '../lib/logger';
 import type { WSMessage, GenerationJob } from '../types';
 
@@ -18,6 +19,13 @@ export function useWebSocket() {
   const { updateJobProgress, updateJobStatus, setQueueStatus, addJob } = useQueueStore();
   const { addAsset } = useLibraryStore();
   const { setIsGenerating, setCurrentJobId } = useGenerationStore();
+  const {
+    setProgress: setRiggingProgress,
+    setDetectedType,
+    setIsRigging,
+    setStatus: setRiggingStatus,
+    setError: setRiggingError,
+  } = useRiggingStore();
 
   // Message handler
   const handleMessage = useCallback(
@@ -124,6 +132,58 @@ export function useWebSocket() {
           });
           break;
         }
+
+        case 'rigging_progress': {
+          logger.info('WebSocket', 'Rigging progress update', {
+            jobId: message.job_id,
+            progress: message.progress,
+            stage: message.stage,
+            detectedType: message.detected_type,
+          });
+
+          setRiggingProgress(message.progress, message.stage);
+          if (message.detected_type) {
+            setDetectedType(message.detected_type);
+          }
+          break;
+        }
+
+        case 'rigging_complete': {
+          logger.info('WebSocket', 'Rigging complete', {
+            assetId: message.asset_id,
+            characterType: message.character_type,
+            boneCount: message.bone_count,
+          });
+
+          setIsRigging(false);
+          setRiggingStatus('completed');
+          setRiggingProgress(1.0, 'Complete');
+
+          addNotification({
+            type: 'success',
+            title: 'Rigging Complete',
+            message: `${message.character_type} skeleton applied (${message.bone_count} bones)`,
+          });
+          break;
+        }
+
+        case 'rigging_failed': {
+          logger.error('WebSocket', 'Rigging failed', {
+            assetId: message.asset_id,
+            error: message.error,
+          });
+
+          setIsRigging(false);
+          setRiggingStatus('failed');
+          setRiggingError(message.error || 'Rigging failed');
+
+          addNotification({
+            type: 'error',
+            title: 'Rigging Failed',
+            message: message.error || 'An error occurred during rigging',
+          });
+          break;
+        }
       }
     },
     [
@@ -134,6 +194,11 @@ export function useWebSocket() {
       setCurrentJobId,
       setIsGenerating,
       addNotification,
+      setRiggingProgress,
+      setDetectedType,
+      setIsRigging,
+      setRiggingStatus,
+      setRiggingError,
     ]
   );
 

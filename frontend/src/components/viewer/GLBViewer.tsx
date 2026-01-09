@@ -19,7 +19,9 @@ import {
 } from '@react-three/drei';
 import * as THREE from 'three';
 import { useViewerStore } from '../../stores/viewerStore';
+import { useRiggingStore } from '../../stores/riggingStore';
 import { Spinner } from '../ui/Spinner';
+import { SkeletonVisualization } from './SkeletonVisualization';
 
 interface GLBViewerProps {
   url: string | null;
@@ -183,6 +185,7 @@ function Scene({
   onError?: (error: Error) => void;
 }) {
   const { settings } = useViewerStore();
+  const { skeletonData, showSkeleton, selectedBone, setSelectedBone } = useRiggingStore();
 
   return (
     <>
@@ -224,6 +227,15 @@ function Scene({
         <BoundsHandler>
           <Center>
             <Model url={url} onLoad={onLoad} onError={onError} />
+            {/* Skeleton overlay */}
+            {skeletonData && (
+              <SkeletonVisualization
+                skeleton={skeletonData}
+                visible={showSkeleton}
+                selectedBone={selectedBone}
+                onBoneSelect={setSelectedBone}
+              />
+            )}
           </Center>
         </BoundsHandler>
       </Bounds>

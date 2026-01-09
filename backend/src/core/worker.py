@@ -135,6 +135,8 @@ class BackgroundWorker:
                 result = await self._process_image_to_3d(job)
             elif job.job_type == "text_to_3d":
                 result = await self._process_text_to_3d(job)
+            elif job.job_type == "rig_asset":
+                result = await self._process_rig_asset(job)
             else:
                 raise ValueError(f"Unknown job type: {job.job_type}")
 
@@ -215,6 +217,9 @@ class BackgroundWorker:
         # Output directory
         output_dir = settings.GENERATED_DIR / asset_id
 
+        # Get the current event loop for thread-safe scheduling
+        loop = asyncio.get_running_loop()
+
         # Create progress callback that updates queue and broadcasts
         async def progress_callback(progress: float, stage: str):
             await self._queue.update_progress(job.id, progress, stage)
@@ -225,10 +230,10 @@ class BackgroundWorker:
                 status="processing",
             )
 
-        # Sync wrapper for the async callback
+        # Sync wrapper for the async callback (called from thread pool)
         def sync_progress(progress: float, stage: str):
-            # Schedule the async callback
-            asyncio.create_task(progress_callback(progress, stage))
+            # Use run_coroutine_threadsafe to schedule on the main event loop
+            asyncio.run_coroutine_threadsafe(progress_callback(progress, stage), loop)
 
         # Run generation
         result = await self._pipeline.generate(
@@ -273,6 +278,91 @@ class BackgroundWorker:
             "success": False,
             "error": "Text-to-3D is not yet implemented",
         }
+
+    async def _process_rig_asset(self, job) -> dict:
+        """Process auto-rigging job.
+
+        Args:
+            job: Job instance
+
+        Returns:
+            Result dictionary
+        """
+        from src.rigging.service import get_rigging_service
+        from src.rigging.schemas import CharacterType, RiggingProcessor
+        from src.database import async_session_maker
+
+        payload = job.payload
+        asset_id = payload["asset_id"]
+        mesh_path = Path(payload["mesh_path"])
+        character_type = CharacterType(payload.get("character_type", "auto"))
+        processor = RiggingProcessor(payload.get("processor", "auto"))
+
+        # Resolve mesh path
+        if not mesh_path.is_absolute():
+            mesh_path = settings.STORAGE_ROOT / mesh_path
+
+        # Output directory (same as asset)
+        output_dir = mesh_path.parent / "rigged"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Get the current event loop for thread-safe scheduling
+        loop = asyncio.get_running_loop()
+
+        # Create progress callback
+        async def progress_callback(progress: float, stage: str):
+            await self._queue.update_progress(job.id, progress, stage)
+            await self._ws_manager.send_progress(
+                job_id=job.id,
+                progress=progress,
+                stage=stage,
+                status="processing",
+            )
+
+        def sync_progress(progress: float, stage: str):
+            asyncio.run_coroutine_threadsafe(progress_callback(progress, stage), loop)
+
+        # Run rigging
+        async with async_session_maker() as db:
+            service = get_rigging_service(db)
+            result = await service.auto_rig(
+                asset_id=asset_id,
+                mesh_path=mesh_path,
+                output_dir=output_dir,
+                character_type=character_type,
+                processor=processor,
+                progress_callback=sync_progress,
+            )
+
+            if result.success:
+                # Update asset in database
+                from sqlalchemy import select
+                from src.generation.models import Asset
+
+                asset_result = await db.execute(select(Asset).where(Asset.id == asset_id))
+                asset = asset_result.scalar_one_or_none()
+
+                if asset:
+                    asset.is_rigged = True
+                    asset.rigging_data = result.skeleton.model_dump() if result.skeleton else None
+                    asset.character_type = result.detected_type.value if result.detected_type else None
+                    asset.rigged_mesh_path = result.rigged_mesh_path
+                    asset.rigging_processor = result.processor_used.value if result.processor_used else None
+                    await db.commit()
+
+                return {
+                    "success": True,
+                    "asset_id": asset_id,
+                    "character_type": result.detected_type.value if result.detected_type else None,
+                    "bone_count": result.skeleton.bone_count if result.skeleton else 0,
+                    "rigged_mesh_path": result.rigged_mesh_path,
+                    "processing_time": result.processing_time,
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": result.error,
+                }
 
 
 # Global worker instance

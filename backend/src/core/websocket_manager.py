@@ -268,6 +268,54 @@ class WebSocketManager:
 
         await self.broadcast(message)
 
+    async def send_rigging_progress(
+        self,
+        job_id: str,
+        progress: float,
+        stage: str,
+        detected_type: Optional[str] = None,
+    ) -> None:
+        """Send rigging-specific progress update.
+
+        Args:
+            job_id: Job ID
+            progress: Progress value (0.0-1.0)
+            stage: Current processing stage
+            detected_type: Detected character type (humanoid/quadruped)
+        """
+        message = {
+            "type": "rigging_progress",
+            "job_id": job_id,
+            "progress": progress,
+            "stage": stage,
+        }
+
+        if detected_type:
+            message["detected_type"] = detected_type
+
+        await self.broadcast(message)
+
+    async def send_rigging_complete(
+        self,
+        asset_id: str,
+        character_type: str,
+        bone_count: int,
+    ) -> None:
+        """Send notification when rigging is complete.
+
+        Args:
+            asset_id: Asset ID that was rigged
+            character_type: Detected character type
+            bone_count: Number of bones in skeleton
+        """
+        message = {
+            "type": "rigging_complete",
+            "asset_id": asset_id,
+            "character_type": character_type,
+            "bone_count": bone_count,
+        }
+        await self.broadcast(message)
+
 
 # Global manager instance
 _manager: Optional[WebSocketManager] = None

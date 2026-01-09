@@ -124,7 +124,10 @@ export type WSMessageType =
   | 'job_created'
   | 'asset_ready'
   | 'error'
-  | 'pong';
+  | 'pong'
+  | 'rigging_progress'
+  | 'rigging_complete'
+  | 'rigging_failed';
 
 export interface WSProgressMessage {
   type: 'progress';
@@ -169,12 +172,36 @@ export interface WSErrorMessage {
   job_id?: string;
 }
 
+export interface WSRiggingProgressMessage {
+  type: 'rigging_progress';
+  job_id: string;
+  progress: number;
+  stage: string;
+  detected_type?: string;
+}
+
+export interface WSRiggingCompleteMessage {
+  type: 'rigging_complete';
+  asset_id: string;
+  character_type: string;
+  bone_count: number;
+}
+
+export interface WSRiggingFailedMessage {
+  type: 'rigging_failed';
+  asset_id: string;
+  error: string;
+}
+
 export type WSMessage =
   | WSProgressMessage
   | WSQueueStatusMessage
   | WSJobCreatedMessage
   | WSAssetReadyMessage
   | WSErrorMessage
+  | WSRiggingProgressMessage
+  | WSRiggingCompleteMessage
+  | WSRiggingFailedMessage
   | { type: 'pong' };
 
 // Viewer Types

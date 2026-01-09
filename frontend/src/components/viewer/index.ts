@@ -7,3 +7,4 @@ export { GLBViewer, preloadModel } from './GLBViewer';
 export { ViewerToolbar, CompactViewerToolbar } from './ViewerToolbar';
 export { ModelInfo, CompactModelInfo } from './ModelInfo';
 export { EmptyState, LoadingState, ErrorState, ControlsHint } from './ViewerStates';
+export { SkeletonVisualization, useSkeletonBounds } from './SkeletonVisualization';

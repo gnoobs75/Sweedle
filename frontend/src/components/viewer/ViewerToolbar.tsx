@@ -4,6 +4,7 @@
 
 import { useState } from 'react';
 import { useViewerStore } from '../../stores/viewerStore';
+import { useRiggingStore } from '../../stores/riggingStore';
 import { Button } from '../ui/Button';
 import { Slider } from '../ui/Slider';
 import { Select } from '../ui/Select';
@@ -47,6 +48,8 @@ export function ViewerToolbar({ className }: ViewerToolbarProps) {
     availableLodLevels,
     setLodLevel,
   } = useViewerStore();
+
+  const { skeletonData, showSkeleton, setShowSkeleton, selectedBone } = useRiggingStore();
 
   const [showSettings, setShowSettings] = useState(false);
 
@@ -104,6 +107,26 @@ export function ViewerToolbar({ className }: ViewerToolbarProps) {
             </svg>
           </Button>
         </Tooltip>
+
+        {/* Skeleton toggle - only show when skeleton data is available */}
+        {skeletonData && (
+          <Tooltip content={`Skeleton (S)${selectedBone ? ` - ${selectedBone}` : ''}`} position="bottom">
+            <Button
+              variant={showSkeleton ? 'primary' : 'ghost'}
+              size="sm"
+              onClick={() => setShowSkeleton(!showSkeleton)}
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 4v1m0 14v1m-7-8h1m12 0h1m-2.636-5.364l-.707.707m-9.314 9.314l-.707.707m0-10.728l.707.707m9.314 9.314l.707.707M12 8a4 4 0 100 8 4 4 0 000-8z"
+                />
+              </svg>
+            </Button>
+          </Tooltip>
+        )}
 
         <div className="w-px h-6 bg-border mx-2" />
 

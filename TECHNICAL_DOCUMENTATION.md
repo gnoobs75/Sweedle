@@ -2,8 +2,8 @@
 
 ## Full Stack Architecture Reference
 
-**Version**: 1.0.0
-**Last Updated**: January 2026
+**Version**: 1.1.0
+**Last Updated**: January 9, 2026
 **GitHub**: https://github.com/gnoobs75/Sweedle.git
 
 ---
@@ -18,7 +18,8 @@
 6. [WebSocket Protocol](#6-websocket-protocol)
 7. [Database Schema](#7-database-schema)
 8. [Configuration](#8-configuration)
-9. [Key Files Reference](#9-key-files-reference)
+9. [Rigging System](#9-rigging-system)
+10. [Key Files Reference](#10-key-files-reference)
 
 ---
 
@@ -30,13 +31,13 @@
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              FRONTEND (React + TypeScript)                   │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
-│  │ Generation   │  │   Viewer     │  │   Library    │  │    Queue     │     │
+│  │ Generation   │  │   Viewer     │  │   Library    │  │   Rigging    │     │
 │  │   Panel      │  │   Panel      │  │    Panel     │  │    Panel     │     │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘     │
 │         │                 │                 │                 │             │
 │  ┌──────┴─────────────────┴─────────────────┴─────────────────┴───────┐     │
 │  │                    Zustand State Management                         │     │
-│  │  generationStore │ viewerStore │ libraryStore │ queueStore │ uiStore│     │
+│  │  generationStore │ viewerStore │ libraryStore │ riggingStore       │     │
 │  └──────┬─────────────────────────────────────────────────────────────┘     │
 │         │                                                                    │
 │  ┌──────┴─────────────────────────────────────────────────────────────┐     │
@@ -50,26 +51,26 @@
 │  ┌──────────────────────────────────────────────────────────────────────┐   │
 │  │                          FastAPI Application                          │   │
 │  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────────┐  │   │
-│  │  │ Generation │  │   Assets   │  │   Export   │  │   WebSocket    │  │   │
+│  │  │ Generation │  │   Assets   │  │  Rigging   │  │   WebSocket    │  │   │
 │  │  │   Router   │  │   Router   │  │   Router   │  │    Router      │  │   │
 │  │  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘  └───────┬────────┘  │   │
 │  └────────┼───────────────┼───────────────┼─────────────────┼───────────┘   │
 │           │               │               │                 │               │
 │  ┌────────┴───────────────┴───────────────┴─────────────────┴───────────┐   │
 │  │                        Service Layer                                  │   │
-│  │  GenerationService │ AssetService │ ExportService │ WebSocketManager │   │
+│  │  GenerationService │ AssetService │ RiggingService │ WebSocketManager│   │
 │  └────────┬─────────────────────────────────────────────────────────────┘   │
 │           │                                                                  │
 │  ┌────────┼─────────────────────────────────────────────────────────────┐   │
-│  │ ┌──────┴──────┐  ┌──────────────┐  ┌──────────────┐                   │   │
-│  │ │  JobQueue   │──│   Worker     │──│   Pipeline   │                   │   │
-│  │ │ (asyncio)   │  │ (Background) │  │ (Hunyuan3D)  │                   │   │
-│  │ └─────────────┘  └──────────────┘  └──────────────┘                   │   │
-│  │                                           │                            │   │
-│  │                                    ┌──────┴──────┐                     │   │
-│  │                                    │    CUDA     │                     │   │
-│  │                                    │    GPU      │                     │   │
-│  │                                    └─────────────┘                     │   │
+│  │ ┌──────┴──────┐  ┌──────────────┐  ┌──────────────┐  ┌────────────┐  │   │
+│  │ │  JobQueue   │──│   Worker     │──│   Pipeline   │  │  Rigging   │  │   │
+│  │ │ (asyncio)   │  │ (Background) │  │ (Hunyuan3D)  │  │ Processors │  │   │
+│  │ └─────────────┘  └──────────────┘  └──────────────┘  └────────────┘  │   │
+│  │                                           │               │           │   │
+│  │                                    ┌──────┴──────┐  ┌─────┴──────┐    │   │
+│  │                                    │    CUDA     │  │  Blender   │    │   │
+│  │                                    │    GPU      │  │ (headless) │    │   │
+│  │                                    └─────────────┘  └────────────┘    │   │
 │  └──────────────────────────────────────────────────────────────────────┘   │
 │           │                                                                  │
 │  ┌────────┴─────────────────────────────────────────────────────────────┐   │
@@ -77,7 +78,7 @@
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                │   │
 │  │  │   SQLite     │  │  File System │  │ Model Cache  │                │   │
 │  │  │  (Assets,    │  │  (Uploads,   │  │ (HuggingFace │                │   │
-│  │  │   Jobs)      │  │  Generated)  │  │  Models)     │                │   │
+│  │  │  Jobs, Rigs) │  │  Generated)  │  │  Models)     │                │   │
 │  │  └──────────────┘  └──────────────┘  └──────────────┘                │   │
 │  └──────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -1355,9 +1356,378 @@ VITE_WS_BASE_URL=ws://localhost:8000
 
 ---
 
-## 9. Key Files Reference
+## 9. Rigging System
 
-### 9.1 Backend Files
+### 9.1 Architecture Overview
+
+The rigging system provides automated skeleton generation and weight painting for 3D models using a hybrid approach:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           RIGGING FLOW                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+User selects asset in Library
+         │
+         ▼
+┌─────────────────┐     ┌─────────────────┐
+│  RiggingPanel   │────►│ POST /api/      │
+│  (Frontend)     │     │ rigging/auto-rig│
+└─────────────────┘     └────────┬────────┘
+                                 │
+                                 ▼
+                        ┌─────────────────┐
+                        │   Job Queue     │
+                        │ (rig_asset job) │
+                        └────────┬────────┘
+                                 │
+                                 ▼
+                        ┌─────────────────┐
+                        │ Background      │
+                        │ Worker          │
+                        └────────┬────────┘
+                                 │
+              ┌──────────────────┴──────────────────┐
+              │                                     │
+              ▼                                     ▼
+     ┌─────────────────┐                   ┌─────────────────┐
+     │    UniRig       │                   │    Blender      │
+     │  (Humanoid)     │                   │  (Quadruped)    │
+     └────────┬────────┘                   └────────┬────────┘
+              │                                     │
+              └──────────────────┬──────────────────┘
+                                 │
+                                 ▼
+                        ┌─────────────────┐
+                        │ Rigged GLB      │
+                        │ + Skeleton Data │
+                        └────────┬────────┘
+                                 │
+                                 ▼
+                        ┌─────────────────┐
+                        │ WebSocket       │
+                        │ (rigging_complete)
+                        └────────┬────────┘
+                                 │
+                                 ▼
+                        ┌─────────────────┐
+                        │ Viewer shows    │
+                        │ skeleton overlay│
+                        └─────────────────┘
+```
+
+### 9.2 Backend Components
+
+#### 9.2.1 Rigging Router
+
+**File**: `backend/src/rigging/router.py`
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/rigging/auto-rig` | POST | Submit asset for auto-rigging |
+| `/api/rigging/jobs/{job_id}` | GET | Get rigging job status |
+| `/api/rigging/jobs/{job_id}` | DELETE | Cancel rigging job |
+| `/api/rigging/skeleton/{asset_id}` | GET | Get skeleton data |
+| `/api/rigging/detect-type` | POST | Detect character type |
+| `/api/rigging/templates` | GET | List skeleton templates |
+| `/api/rigging/export-fbx` | POST | Export as FBX |
+
+#### 9.2.2 RiggingService
+
+**File**: `backend/src/rigging/service.py`
+
+```python
+class RiggingService:
+    async def auto_rig(self, asset_id, character_type, processor) -> RiggingResult:
+        """
+        Main rigging workflow:
+        1. Load mesh from asset
+        2. Detect character type (if auto)
+        3. Select processor (UniRig or Blender)
+        4. Generate skeleton
+        5. Calculate weights
+        6. Export rigged mesh
+        """
+
+    async def detect_character_type(self, asset_id) -> CharacterType:
+        """Analyze mesh proportions to determine humanoid vs quadruped"""
+
+    async def export_fbx(self, asset_id, engine) -> Path:
+        """Convert rigged GLB to FBX using Blender"""
+```
+
+#### 9.2.3 Rigging Processors
+
+**Base Processor** (`backend/src/rigging/processors/base.py`):
+```python
+class BaseRiggingProcessor(ABC):
+    @abstractmethod
+    async def process(self, mesh_path, character_type, progress_callback) -> RiggingResult
+
+    @abstractmethod
+    async def is_available(self) -> bool
+```
+
+**UniRig Processor** (`backend/src/rigging/processors/unirig.py`):
+- ML-based rigging for humanoid meshes
+- Uses heuristic-based skeleton fitting
+- Proximity-based weight calculation
+- Fast processing (~5-10 seconds)
+
+**Blender Processor** (`backend/src/rigging/processors/blender.py`):
+- Headless Blender scripting
+- Better for quadrupeds and complex meshes
+- FBX export capability
+- More control over bone placement
+
+#### 9.2.4 Skeleton Templates
+
+**Humanoid Template** (`backend/src/rigging/skeleton/humanoid.py`):
+- 65 bones (Mixamo/Unity compatible)
+- Full body: spine, arms, legs, hands, feet
+- Bone hierarchy follows industry standards
+
+**Quadruped Template** (`backend/src/rigging/skeleton/quadruped.py`):
+- 45 bones
+- Spine, four legs, tail, head
+- Optimized for animals
+
+### 9.3 Data Models
+
+#### SkeletonData (stored in Asset.rigging_data)
+
+```python
+class SkeletonData(BaseModel):
+    root_bone: str                    # "Hips" for humanoid
+    bones: list[BoneData]             # All bones
+    character_type: CharacterType     # "humanoid" | "quadruped"
+    bone_count: int                   # Total bones
+
+class BoneData(BaseModel):
+    name: str                         # "LeftArm"
+    parent: str | None                # "LeftShoulder"
+    head_position: tuple[float, 3]    # [x, y, z]
+    tail_position: tuple[float, 3]    # [x, y, z]
+    rotation: tuple[float, 4]         # Quaternion [x, y, z, w]
+```
+
+#### Asset Rigging Fields
+
+```python
+# Added to Asset model
+is_rigged = Column(Boolean, default=False)
+rigging_data = Column(JSON, nullable=True)        # SkeletonData
+character_type = Column(String(50), nullable=True)
+rigged_mesh_path = Column(String(500), nullable=True)
+rigging_processor = Column(String(50), nullable=True)
+```
+
+### 9.4 API Reference
+
+#### POST `/api/rigging/auto-rig`
+
+Submit asset for auto-rigging.
+
+**Request** (multipart/form-data):
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `asset_id` | string | Yes | Asset UUID |
+| `character_type` | string | No | auto/humanoid/quadruped |
+| `processor` | string | No | auto/unirig/blender |
+| `priority` | string | No | low/normal/high |
+
+**Response**:
+```json
+{
+  "job_id": "uuid",
+  "asset_id": "uuid",
+  "status": "pending",
+  "message": "Rigging job submitted",
+  "queue_position": 2
+}
+```
+
+#### GET `/api/rigging/jobs/{job_id}`
+
+Get rigging job status.
+
+**Response**:
+```json
+{
+  "job_id": "uuid",
+  "asset_id": "uuid",
+  "status": "processing",
+  "progress": 0.45,
+  "stage": "Creating skeleton...",
+  "detected_type": "humanoid",
+  "processor_used": "unirig",
+  "error": null,
+  "created_at": "2026-01-09T12:00:00Z",
+  "started_at": "2026-01-09T12:00:05Z",
+  "completed_at": null
+}
+```
+
+#### GET `/api/rigging/skeleton/{asset_id}`
+
+Get skeleton data for rigged asset.
+
+**Response**:
+```json
+{
+  "asset_id": "uuid",
+  "skeleton": {
+    "root_bone": "Hips",
+    "bones": [
+      {
+        "name": "Hips",
+        "parent": null,
+        "head_position": [0, 1.0, 0],
+        "tail_position": [0, 1.1, 0],
+        "rotation": [0, 0, 0, 1]
+      }
+    ],
+    "character_type": "humanoid",
+    "bone_count": 65
+  },
+  "rigged_mesh_path": "/storage/generated/uuid/model_rigged.glb",
+  "processor_used": "unirig",
+  "created_at": "2026-01-09T12:00:00Z"
+}
+```
+
+#### GET `/api/rigging/templates`
+
+List available skeleton templates.
+
+**Response**:
+```json
+{
+  "templates": [
+    {
+      "name": "humanoid_standard",
+      "character_type": "humanoid",
+      "bone_count": 65,
+      "description": "Standard humanoid skeleton (Mixamo compatible)"
+    },
+    {
+      "name": "quadruped_standard",
+      "character_type": "quadruped",
+      "bone_count": 45,
+      "description": "Standard quadruped skeleton"
+    }
+  ]
+}
+```
+
+### 9.5 WebSocket Messages
+
+#### rigging_progress
+
+```json
+{
+  "type": "rigging_progress",
+  "job_id": "uuid",
+  "progress": 0.45,
+  "stage": "Creating skeleton...",
+  "detected_type": "humanoid"
+}
+```
+
+#### rigging_complete
+
+```json
+{
+  "type": "rigging_complete",
+  "asset_id": "uuid",
+  "character_type": "humanoid",
+  "bone_count": 65
+}
+```
+
+#### rigging_failed
+
+```json
+{
+  "type": "rigging_failed",
+  "asset_id": "uuid",
+  "error": "Failed to generate skeleton"
+}
+```
+
+### 9.6 Frontend Components
+
+#### riggingStore.ts
+
+```typescript
+interface RiggingState {
+  // Job state
+  currentJobId: string | null
+  isRigging: boolean
+  progress: number
+  stage: string
+  status: RiggingStatus
+
+  // Configuration
+  characterType: 'humanoid' | 'quadruped' | 'auto'
+  processor: 'unirig' | 'blender' | 'auto'
+
+  // Results
+  detectedType: CharacterType | null
+  skeletonData: SkeletonData | null
+  error: string | null
+
+  // Viewer
+  showSkeleton: boolean
+  selectedBone: string | null
+}
+```
+
+#### RiggingPanel.tsx
+
+Main rigging UI with:
+- Asset preview
+- Character type selector (auto/humanoid/quadruped)
+- Processor selector (auto/unirig/blender)
+- Progress display with stages
+- Completion/error states
+
+#### SkeletonVisualization.tsx
+
+Three.js component for rendering skeleton:
+- Cylinder bones with joint spheres
+- Color coding (root=pink, selected=yellow, normal=blue)
+- Clickable bones for selection
+- Toggle visibility via toolbar
+
+### 9.7 Rigging Flow
+
+```
+1. User selects completed asset in Library
+2. Opens RiggingPanel
+3. Selects character type (or auto-detect)
+4. Clicks "Start Auto-Rigging"
+5. Frontend calls POST /api/rigging/auto-rig
+6. Job queued, returns job_id
+7. Worker processes job:
+   a. Load mesh (0-15%)
+   b. Detect character type (15-25%)
+   c. Create skeleton from template (25-50%)
+   d. Calculate vertex weights (50-75%)
+   e. Export rigged mesh (75-100%)
+8. WebSocket broadcasts progress
+9. On complete:
+   - Asset.is_rigged = true
+   - Asset.rigging_data = skeleton
+   - Frontend fetches skeleton
+   - Viewer shows bone overlay
+```
+
+---
+
+## 10. Key Files Reference
+
+### 10.1 Backend Files
 
 | File | Purpose |
 |------|---------|
@@ -1377,8 +1747,16 @@ VITE_WS_BASE_URL=ws://localhost:8000
 | `backend/src/inference/pipeline.py` | Hunyuan3D wrapper |
 | `backend/src/inference/preprocessor.py` | Image preprocessing (rembg) |
 | `backend/src/inference/config.py` | Generation configuration |
+| `backend/src/rigging/router.py` | Rigging API endpoints |
+| `backend/src/rigging/service.py` | RiggingService business logic |
+| `backend/src/rigging/schemas.py` | Rigging Pydantic schemas |
+| `backend/src/rigging/config.py` | Rigging configuration |
+| `backend/src/rigging/processors/unirig.py` | UniRig ML processor |
+| `backend/src/rigging/processors/blender.py` | Blender headless processor |
+| `backend/src/rigging/skeleton/humanoid.py` | 65-bone humanoid template |
+| `backend/src/rigging/skeleton/quadruped.py` | 45-bone quadruped template |
 
-### 9.2 Frontend Files
+### 10.2 Frontend Files
 
 | File | Purpose |
 |------|---------|
@@ -1388,15 +1766,22 @@ VITE_WS_BASE_URL=ws://localhost:8000
 | `frontend/src/stores/queueStore.ts` | Job queue state |
 | `frontend/src/stores/viewerStore.ts` | 3D viewer state |
 | `frontend/src/stores/uiStore.ts` | UI/notification state |
+| `frontend/src/stores/riggingStore.ts` | Rigging state management |
 | `frontend/src/services/api/client.ts` | HTTP client |
 | `frontend/src/services/api/generation.ts` | Generation API calls |
 | `frontend/src/services/api/assets.ts` | Asset API calls |
+| `frontend/src/services/api/rigging.ts` | Rigging API calls |
 | `frontend/src/services/websocket/WebSocketClient.ts` | WebSocket client |
 | `frontend/src/hooks/useWebSocket.ts` | WebSocket integration hook |
 | `frontend/src/types/index.ts` | TypeScript type definitions |
 | `frontend/src/components/generation/` | Generation UI components |
 | `frontend/src/components/viewer/` | 3D viewer components |
+| `frontend/src/components/viewer/GLBViewer.tsx` | 3D model viewer |
+| `frontend/src/components/viewer/SkeletonVisualization.tsx` | Bone rendering |
 | `frontend/src/components/library/` | Asset library components |
+| `frontend/src/components/rigging/RiggingPanel.tsx` | Main rigging UI |
+| `frontend/src/components/rigging/CharacterTypeSelector.tsx` | Type picker |
+| `frontend/src/components/rigging/RiggingProgress.tsx` | Progress display |
 
 ---
 
@@ -1442,4 +1827,4 @@ self.pipeline = pipeline
 
 ---
 
-*Document generated for Sweedle v1.0.0*
+*Document generated for Sweedle v1.1.0 - includes Auto-Rigging System*

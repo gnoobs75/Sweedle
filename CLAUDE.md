@@ -91,6 +91,12 @@ C:\Claude\Sweedle\
 │   │   ├── generation\        # Generation API
 │   │   ├── assets\            # Asset library API
 │   │   ├── export\            # LOD, engine export
+│   │   ├── rigging\           # Auto-rigging system
+│   │   │   ├── router.py      # Rigging API endpoints
+│   │   │   ├── service.py     # RiggingService logic
+│   │   │   ├── schemas.py     # Pydantic models
+│   │   │   ├── processors\    # UniRig, Blender processors
+│   │   │   └── skeleton\      # Skeleton templates
 │   │   └── websocket\         # Real-time updates
 │   ├── storage\               # File storage
 │   ├── data\                  # SQLite database
@@ -101,11 +107,19 @@ C:\Claude\Sweedle\
 │   ├── src\
 │   │   ├── App.tsx           # Main application
 │   │   ├── components\       # UI components
-│   │   ├── stores\           # Zustand state
+│   │   │   ├── rigging\      # RiggingPanel, CharacterTypeSelector
+│   │   │   └── viewer\       # GLBViewer, SkeletonVisualization
+│   │   ├── stores\           # Zustand state (incl. riggingStore)
 │   │   ├── hooks\            # Custom hooks
-│   │   └── services\         # API clients
+│   │   └── services\         # API clients (incl. rigging.ts)
 │   ├── node_modules\
 │   └── package.json
+│
+├── .claude\
+│   └── skills\               # Claude Code skills
+│       ├── rig-asset.md
+│       ├── debug-rigging.md
+│       └── export-rigged.md
 │
 ├── start.bat                 # Start both services
 ├── start-backend-debug.bat   # Backend with logging
@@ -165,10 +179,28 @@ C:\Claude\Sweedle\
 | DELETE | `/api/assets/{id}` | Delete asset |
 | GET | `/api/assets/tags` | List tags |
 
+### Rigging
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/rigging/auto-rig` | Submit asset for rigging |
+| GET | `/api/rigging/jobs/{id}` | Get rigging job status |
+| DELETE | `/api/rigging/jobs/{id}` | Cancel rigging job |
+| GET | `/api/rigging/skeleton/{asset_id}` | Get skeleton data |
+| POST | `/api/rigging/detect-type` | Detect character type |
+| GET | `/api/rigging/templates` | List skeleton templates |
+| POST | `/api/rigging/export-fbx` | Export rigged model as FBX |
+
 ### WebSocket
 | Endpoint | Purpose |
 |----------|---------|
 | `/ws/progress` | Real-time job progress |
+
+### WebSocket Rigging Messages
+| Message Type | Description |
+|--------------|-------------|
+| `rigging_progress` | Rigging job progress updates |
+| `rigging_complete` | Rigging completed notification |
+| `rigging_failed` | Rigging failure notification |
 
 ---
 
@@ -273,11 +305,13 @@ If `pipeline is None: True`, there's a loading issue.
 - [ ] UV unwrapping improvements
 - [ ] PBR material generation
 
-### Phase 3: Auto-Rigging
-- [ ] Skeleton detection for humanoids
-- [ ] Automatic bone placement
-- [ ] Weight painting
-- [ ] T-pose normalization
+### Phase 3: Auto-Rigging (COMPLETED)
+- [x] Skeleton detection for humanoids and quadrupeds
+- [x] Automatic bone placement (65-bone humanoid, 45-bone quadruped)
+- [x] Weight painting (proximity-based weights)
+- [x] Hybrid processors (UniRig ML + Blender headless)
+- [x] Skeleton visualization in 3D viewer
+- [x] Multi-format export (GLB + FBX)
 
 ### Phase 4: Animation
 - [ ] Basic idle animations
@@ -325,6 +359,36 @@ Add support for a new export format (FBX, OBJ, etc.)
 /export-format fbx
 ```
 
+### /rig-asset
+Auto-rig an existing asset with skeleton and weights.
+```
+/rig-asset [asset_id] [--type humanoid|quadruped|auto] [--processor unirig|blender|auto]
+```
+Examples:
+- `/rig-asset` - Rig current viewer asset
+- `/rig-asset abc123` - Rig specific asset by ID
+- `/rig-asset --type humanoid` - Force humanoid skeleton
+
+### /debug-rigging
+Debug rigging pipeline issues - check processor availability, recent errors.
+```
+/debug-rigging
+```
+Checks:
+- UniRig model status
+- Blender path configuration
+- GPU/CUDA availability
+- Recent rigging job errors
+
+### /export-rigged
+Export a rigged model to game engine format.
+```
+/export-rigged [asset_id] [--format glb|fbx] [--engine unity|unreal|godot]
+```
+Examples:
+- `/export-rigged abc123 --format fbx --engine unity`
+- `/export-rigged --format glb` - Export current asset as GLB
+
 ---
 
 ## Code Patterns
@@ -366,6 +430,17 @@ Add support for a new export format (FBX, OBJ, etc.)
 - [ ] Asset appears in library
 - [ ] Can delete asset
 - [ ] Can search/filter assets
+
+### Rigging Testing Checklist
+
+- [ ] RiggingPanel opens when selecting asset
+- [ ] Character type auto-detection works
+- [ ] Can start auto-rigging job
+- [ ] Progress updates via WebSocket
+- [ ] Skeleton appears in viewer after completion
+- [ ] Skeleton toggle button works in toolbar
+- [ ] Can click bones to select them
+- [ ] Export as FBX works (requires Blender)
 
 ### Verify Generation Works
 

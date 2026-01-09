@@ -7,6 +7,18 @@ import { useState, useEffect, useCallback } from 'react';
 import { cn } from '../../lib/utils';
 import { logger } from '../../lib/logger';
 
+// Detect if running in Tauri
+// Tauri v2 uses __TAURI_INTERNALS__, v1 used __TAURI__
+function isTauri(): boolean {
+  return typeof window !== 'undefined' &&
+    ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+}
+
+// Get health endpoint URL
+function getHealthUrl(): string {
+  return isTauri() ? 'http://localhost:8000/health' : '/health';
+}
+
 interface HealthResponse {
   status: string;
   app: string;
@@ -29,7 +41,7 @@ export function BackendStatus() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-      const response = await fetch('/health', {
+      const response = await fetch(getHealthUrl(), {
         signal: controller.signal,
       });
       clearTimeout(timeoutId);

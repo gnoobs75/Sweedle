@@ -1,5 +1,20 @@
 """Sweedle Backend - FastAPI Application Entry Point."""
 
+import os
+import sys
+
+# Add CUDA DLL directory for Windows (required for custom_rasterizer)
+# Must be done before importing torch or any CUDA-dependent modules
+if sys.platform == "win32":
+    cuda_paths = [
+        r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin",
+        r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\bin",
+    ]
+    for cuda_path in cuda_paths:
+        if os.path.exists(cuda_path):
+            os.add_dll_directory(cuda_path)
+            break
+
 import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -123,12 +138,14 @@ async def root():
 from src.generation.router import router as generation_router
 from src.websocket.router import router as websocket_router
 from src.assets.router import router as assets_router
-# from src.export.router import router as export_router
+from src.export.router import router as export_router
+from src.rigging.router import router as rigging_router
 
 app.include_router(generation_router, prefix="/api/generation", tags=["Generation"])
 app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
 app.include_router(assets_router, prefix="/api/assets", tags=["Assets"])
-# app.include_router(export_router, prefix="/api/export", tags=["Export"])
+app.include_router(export_router, prefix="/api/export", tags=["Export"])
+app.include_router(rigging_router, prefix="/api", tags=["Rigging"])
 
 
 # Serve frontend static files

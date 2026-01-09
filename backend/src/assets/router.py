@@ -285,9 +285,14 @@ async def download_asset(
     if not asset:
         raise HTTPException(404, "Asset not found")
 
-    file_path = settings.GENERATED_DIR / asset.file_path
+    # Build the correct file path: generated/{asset_id}/{asset_id}.glb
+    file_path = settings.GENERATED_DIR / asset_id / f"{asset_id}.glb"
     if not file_path.exists():
-        raise HTTPException(404, "Asset file not found on disk")
+        # Fallback to the stored file_path if direct path doesn't exist
+        if asset.file_path:
+            file_path = settings.GENERATED_DIR / asset.file_path
+        if not file_path.exists():
+            raise HTTPException(404, "Asset file not found on disk")
 
     return FileResponse(
         path=file_path,

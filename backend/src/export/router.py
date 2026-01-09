@@ -16,7 +16,7 @@ from .thumbnail_generator import ThumbnailGenerator, ThumbnailSettings, Thumbnai
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/export", tags=["export"])
+router = APIRouter()
 
 
 # Request/Response Models

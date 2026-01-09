@@ -120,11 +120,28 @@ class Hunyuan3DPipeline:
                 if self.device == "cuda" and torch.cuda.is_available():
                     # Note: Don't reassign - hy3dgen's .to() returns None instead of self
                     self._shape_pipeline.to(self.device)
-                    logger.info(f"Model loaded on CUDA device")
+                    logger.info(f"Shape model loaded on CUDA device")
 
                 logger.info(f"Loaded shape pipeline from {self.model_path}")
-                logger.info(f"_load_models END - pipeline is None: {self._shape_pipeline is None}, type: {type(self._shape_pipeline)}")
-                # Return early to avoid any exception handlers resetting the pipeline
+
+                # Try to load texture pipeline
+                # Note: Texture models are in Hunyuan3D-2 repo, not Hunyuan3D-2.1
+                try:
+                    from hy3dgen.texgen import Hunyuan3DPaintPipeline
+                    texture_model_path = "tencent/Hunyuan3D-2"
+                    self._texture_pipeline = Hunyuan3DPaintPipeline.from_pretrained(
+                        texture_model_path,
+                        subfolder='hunyuan3d-paint-v2-0-turbo'
+                    )
+                    logger.info("Loaded texture pipeline (Hunyuan3D-Paint) from tencent/Hunyuan3D-2")
+                except ImportError as e:
+                    logger.warning(f"Texture pipeline import failed: {e}. Texture generation disabled.")
+                    self._texture_pipeline = None
+                except Exception as e:
+                    logger.warning(f"Failed to load texture pipeline: {e}. Texture generation disabled.")
+                    self._texture_pipeline = None
+
+                logger.info(f"_load_models END - shape pipeline: {self._shape_pipeline is not None}, texture pipeline: {self._texture_pipeline is not None}")
                 return
 
             except ImportError:
@@ -335,13 +352,39 @@ class Hunyuan3DPipeline:
         config: GenerationConfig,
         progress_callback: Optional[Callable] = None,
     ):
-        """Synchronous texture generation."""
-        # Texture generation is disabled for now - requires custom_rasterizer CUDA module
-        # which is complex to build on Windows
-        logger.info("Texture generation disabled - returning untextured mesh")
-        if progress_callback:
-            progress_callback(1.0, "Skipping texture (not configured)")
-        return mesh
+        """Synchronous texture generation using Hunyuan3D-Paint."""
+        if self._texture_pipeline is None:
+            logger.info("Texture pipeline not available - returning untextured mesh")
+            if progress_callback:
+                progress_callback(1.0, "Skipping texture (pipeline not loaded)")
+            return mesh
+
+        try:
+            logger.info("Starting texture generation with Hunyuan3D-Paint...")
+            if progress_callback:
+                progress_callback(0.1, "Preparing texture generation...")
+
+            # Run texture generation
+            # The paint pipeline takes mesh and image, returns textured mesh
+            textured_mesh = self._texture_pipeline(
+                mesh=mesh,
+                image=image,
+            )
+
+            if progress_callback:
+                progress_callback(1.0, "Texture generation complete")
+
+            logger.info("Texture generation completed successfully")
+            return textured_mesh
+
+        except Exception as e:
+            logger.error(f"Texture generation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            if progress_callback:
+                progress_callback(1.0, f"Texture failed: {str(e)[:50]}")
+            # Return original mesh without texture on failure
+            return mesh
 
     def _save_mesh(
         self,
