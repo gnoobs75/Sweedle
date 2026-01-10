@@ -38,3 +38,4 @@ export type { TooltipProps } from './Tooltip';
 export { ToastContainer } from './Toast';
 export { DebugPanel } from './DebugPanel';
 export { BackendStatus } from './BackendStatus';
+export { GPUMonitor, VRAMIndicator } from './GPUMonitor';

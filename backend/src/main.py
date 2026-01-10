@@ -30,12 +30,18 @@ from src.database import init_db
 # Frontend build directory
 FRONTEND_DIR = Path(__file__).parent.parent.parent / "frontend" / "dist"
 
-# Configure logging
+# Configure logging with file output for monitoring
+LOG_FILE = Path(__file__).parent.parent / "sweedle.log"
 logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG else logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),  # Console output
+        logging.FileHandler(LOG_FILE, mode='w', encoding='utf-8'),  # File output (overwrite each run)
+    ],
 )
 logger = logging.getLogger(__name__)
+logger.info(f"Logging to file: {LOG_FILE}")
 
 
 @asynccontextmanager
@@ -147,6 +153,95 @@ async def device_info():
         "effective_device": settings.compute_device,
         "preprocessing_overlap_enabled": settings.ENABLE_PREPROCESSING_OVERLAP,
         "model_warmup_enabled": settings.ENABLE_MODEL_WARMUP,
+    }
+
+
+# Live GPU stats endpoint (for polling)
+@app.get("/api/device/stats")
+async def device_stats():
+    """Get live GPU/system stats for monitoring."""
+    import psutil
+    import time
+
+    stats = {
+        "timestamp": time.time(),
+        "cpu_percent": psutil.cpu_percent(interval=0.1),
+        "ram_used_gb": round(psutil.virtual_memory().used / 1e9, 2),
+        "ram_total_gb": round(psutil.virtual_memory().total / 1e9, 2),
+        "ram_percent": psutil.virtual_memory().percent,
+    }
+
+    # GPU stats
+    try:
+        import torch
+        if torch.cuda.is_available():
+            stats["gpu"] = {
+                "name": torch.cuda.get_device_name(0),
+                "vram_used_gb": round(torch.cuda.memory_allocated(0) / 1e9, 2),
+                "vram_reserved_gb": round(torch.cuda.memory_reserved(0) / 1e9, 2),
+                "vram_total_gb": round(torch.cuda.get_device_properties(0).total_memory / 1e9, 2),
+                "vram_percent": round(torch.cuda.memory_allocated(0) / torch.cuda.get_device_properties(0).total_memory * 100, 1),
+            }
+            # Try to get GPU utilization via nvidia-smi
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['nvidia-smi', '--query-gpu=utilization.gpu,temperature.gpu', '--format=csv,noheader,nounits'],
+                    capture_output=True, text=True, timeout=1
+                )
+                if result.returncode == 0:
+                    parts = result.stdout.strip().split(', ')
+                    stats["gpu"]["utilization_percent"] = int(parts[0])
+                    stats["gpu"]["temperature_c"] = int(parts[1])
+            except Exception:
+                pass
+        else:
+            stats["gpu"] = None
+    except ImportError:
+        stats["gpu"] = None
+
+    # Worker status
+    if app.state.worker:
+        stats["worker"] = {
+            "running": app.state.worker.is_running,
+            "current_job": app.state.worker.current_job_id,
+        }
+
+    # Queue status
+    if app.state.job_queue:
+        queue_status = app.state.job_queue.get_status()
+        stats["queue"] = {
+            "size": queue_status.get("queue_size", 0),
+            "processing": queue_status.get("current_job") is not None,
+        }
+
+    return stats
+
+
+# VRAM diagnostic endpoint
+@app.get("/api/device/vram-diagnostic")
+async def vram_diagnostic():
+    """Run full VRAM diagnostic to identify memory usage and leaks."""
+    from src.utils.vram_diagnostic import full_diagnostic
+    return full_diagnostic()
+
+
+# Clear VRAM endpoint
+@app.post("/api/device/clear-vram")
+async def clear_vram():
+    """Attempt to clear VRAM by forcing garbage collection and cache clearing."""
+    from src.utils.vram_diagnostic import clear_all_vram, get_vram_info
+
+    before = get_vram_info()
+    result = clear_all_vram()
+    after = get_vram_info()
+
+    return {
+        "success": result.get("success", False),
+        "before_gb": before.get("allocated_gb", 0),
+        "after_gb": after.get("allocated_gb", 0),
+        "freed_gb": result.get("freed_gb", 0),
+        "message": f"Freed {result.get('freed_gb', 0):.2f} GB" if result.get("success") else result.get("error", "Unknown error"),
     }
 
 

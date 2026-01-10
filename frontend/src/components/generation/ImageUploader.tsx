@@ -1,11 +1,14 @@
 /**
- * ImageUploader Component - Drag-and-drop image upload
+ * ImageUploader Component - Drag-and-drop image upload with quality analysis
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/Button';
+import { ImageQualityIndicator, ImageQualityBadge } from './ImageQualityIndicator';
+import type { ImageAnalysis } from '../../services/api/generation';
+import { analyzeImage } from '../../services/api/generation';
 
 interface ImageUploaderProps {
   value: File | null;
@@ -13,6 +16,7 @@ interface ImageUploaderProps {
   onChange: (file: File | null) => void;
   disabled?: boolean;
   className?: string;
+  showQualityAnalysis?: boolean;
 }
 
 const ACCEPTED_TYPES = {
@@ -29,8 +33,47 @@ export function ImageUploader({
   onChange,
   disabled = false,
   className,
+  showQualityAnalysis = true,
 }: ImageUploaderProps) {
   const [error, setError] = useState<string | null>(null);
+  const [analysis, setAnalysis] = useState<ImageAnalysis | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+
+  // Analyze image when it changes
+  useEffect(() => {
+    if (!value || !showQualityAnalysis) {
+      setAnalysis(null);
+      setAnalysisError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setIsAnalyzing(true);
+    setAnalysisError(null);
+
+    analyzeImage(value)
+      .then((result) => {
+        if (!cancelled) {
+          setAnalysis(result);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error('Image analysis failed:', err);
+          setAnalysisError('Could not analyze image');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsAnalyzing(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [value, showQualityAnalysis]);
 
   const onDrop = useCallback(
     (acceptedFiles: File[], rejectedFiles: any[]) => {
@@ -120,6 +163,12 @@ export function ImageUploader({
               alt="Source image"
               className="w-full rounded-xl object-contain max-h-64"
             />
+            {/* Quality badge overlay */}
+            {showQualityAnalysis && (analysis || isAnalyzing) && (
+              <div className="absolute top-2 right-2">
+                <ImageQualityBadge analysis={analysis} isLoading={isAnalyzing} />
+              </div>
+            )}
             {/* Overlay on hover */}
             <div
               className={cn(
@@ -227,6 +276,17 @@ export function ImageUploader({
           </svg>
           {error}
         </p>
+      )}
+
+      {/* Detailed Quality Analysis */}
+      {showQualityAnalysis && preview && (
+        <div className="mt-3">
+          <ImageQualityIndicator
+            analysis={analysis}
+            isLoading={isAnalyzing}
+            error={analysisError}
+          />
+        </div>
       )}
     </div>
   );

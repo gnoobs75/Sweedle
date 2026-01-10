@@ -348,65 +348,193 @@ If `pipeline is None: True`, there's a loading issue.
 
 ## Skills for Claude
 
-### /generate-component
-Generate a new React component with TypeScript and TailwindCSS.
-```
-/generate-component ComponentName
-```
+Skills are slash commands that provide specialized functionality. They are defined in `.claude/skills/` and can be invoked during conversation.
 
-### /add-endpoint
-Add a new FastAPI endpoint with Pydantic schemas.
-```
-/add-endpoint /api/feature/action POST
-```
+### GPU & Memory Management
 
-### /debug-pipeline
+#### /gpu-status
+Check GPU health, VRAM usage, temperature, and loaded models.
+```
+/gpu-status
+```
+Shows: VRAM allocation, GPU temp/utilization, loaded models, backend status.
+
+#### /clear-vram
+Force clear GPU memory when stuck or before heavy operations.
+```
+/clear-vram [--full]
+```
+- Default: Empty cache, garbage collect
+- `--full`: Unload all models and restart backend
+
+#### /gpu-benchmark
+Run a quick benchmark to test generation speed.
+```
+/gpu-benchmark [--quality standard|high]
+```
+Generates test model and reports timing, VRAM usage, performance comparison.
+
+---
+
+### Model & Cache Management
+
+#### /model-status
+Check status of all AI models (loaded, cached, missing).
+```
+/model-status
+```
+Shows: Hunyuan3D-2.1, Hunyuan3D-2 (texture), U2Net cache status and sizes.
+
+#### /clear-cache
+Clear model caches to free disk space or force re-download.
+```
+/clear-cache [huggingface|hy3dgen|rembg|all]
+```
+Warning: Requires re-downloading models (~40GB) on next use.
+
+---
+
+### Debugging & Logs
+
+#### /watch-logs
+Stream backend logs in real-time for debugging.
+```
+/watch-logs [--filter generation|rigging|vram|error]
+```
+Reads from `backend/sweedle.log` with optional filtering.
+
+#### /debug-generation
+Diagnose why a generation failed.
+```
+/debug-generation [job_id]
+```
+Analyzes job status, error messages, VRAM state, suggests fixes.
+
+#### /debug-pipeline
 Debug Hunyuan3D pipeline issues - check model loading, CUDA, etc.
 ```
 /debug-pipeline
 ```
 
-### /add-mesh-processor
-Add a new mesh processing feature (smoothing, decimation, etc.)
+#### /debug-rigging
+Debug rigging pipeline issues - check processor availability, recent errors.
 ```
-/add-mesh-processor smooth
-```
-
-### /export-format
-Add support for a new export format (FBX, OBJ, etc.)
-```
-/export-format fbx
+/debug-rigging
 ```
 
-### /rig-asset
+---
+
+### Generation Presets
+
+#### /generate-quick
+Generate with fast/draft settings for quick iteration (~30-40s).
+```
+/generate-quick <image_path> [name]
+```
+Uses: 20 steps, 192 octree, no texture. Good for prototyping.
+
+#### /generate-production
+Generate with maximum quality settings (~90-120s).
+```
+/generate-production <image_path> [name] [--texture] [--high-poly]
+```
+Uses: 50 steps, 384 octree, optional texture. For final assets.
+
+---
+
+### Batch Operations
+
+#### /batch-generate
+Generate multiple 3D models from a folder of images.
+```
+/batch-generate <folder_path> [--quality standard|high|draft] [--skip-existing] [--texture]
+```
+Examples:
+- `/batch-generate ./sprites --quality standard`
+- `/batch-generate ./characters --skip-existing`
+
+#### /batch-export
+Export multiple assets to game engine format.
+```
+/batch-export [--format glb|fbx|obj] [--engine unity|unreal|godot] [--filter <query>]
+```
+Examples:
+- `/batch-export --format fbx --engine unity`
+- `/batch-export --filter tag:character`
+
+---
+
+### Rigging
+
+#### /rig-asset
 Auto-rig an existing asset with skeleton and weights.
 ```
 /rig-asset [asset_id] [--type humanoid|quadruped|auto] [--processor unirig|blender|auto]
 ```
 Examples:
 - `/rig-asset` - Rig current viewer asset
-- `/rig-asset abc123` - Rig specific asset by ID
-- `/rig-asset --type humanoid` - Force humanoid skeleton
+- `/rig-asset abc123 --type humanoid`
 
-### /debug-rigging
-Debug rigging pipeline issues - check processor availability, recent errors.
-```
-/debug-rigging
-```
-Checks:
-- UniRig model status
-- Blender path configuration
-- GPU/CUDA availability
-- Recent rigging job errors
-
-### /export-rigged
+#### /export-rigged
 Export a rigged model to game engine format.
 ```
 /export-rigged [asset_id] [--format glb|fbx] [--engine unity|unreal|godot]
 ```
 Examples:
 - `/export-rigged abc123 --format fbx --engine unity`
-- `/export-rigged --format glb` - Export current asset as GLB
+
+---
+
+### Database & Cleanup
+
+#### /cleanup-assets
+Remove orphaned files and failed generations.
+```
+/cleanup-assets [--dry-run] [--include-failed] [--include-orphaned]
+```
+Options:
+- `--dry-run`: Preview without deleting
+- `--include-failed`: Remove failed generation attempts
+- `--include-orphaned`: Remove files not in database
+
+#### /db-maintenance
+Run database maintenance tasks.
+```
+/db-maintenance [vacuum|check|stats|backup|repair]
+```
+- `vacuum`: Reclaim disk space
+- `check`: Verify integrity
+- `stats`: Show counts and sizes
+- `backup`: Create backup
+- `repair`: Attempt repair
+
+---
+
+### Development
+
+#### /generate-component
+Generate a new React component with TypeScript and TailwindCSS.
+```
+/generate-component ComponentName
+```
+
+#### /add-endpoint
+Add a new FastAPI endpoint with Pydantic schemas.
+```
+/add-endpoint /api/feature/action POST
+```
+
+#### /add-mesh-processor
+Add a new mesh processing feature (smoothing, decimation, etc.)
+```
+/add-mesh-processor smooth
+```
+
+#### /export-format
+Add support for a new export format (FBX, OBJ, etc.)
+```
+/export-format fbx
+```
 
 ---
 

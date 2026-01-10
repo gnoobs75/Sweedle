@@ -62,7 +62,27 @@
       "Bash(tasklist:*)",
       "Bash(cmd.exe /c \"start cmd /k start-backend-debug.bat\")",
       "Bash(cmd.exe //c start-backend-debug.bat)",
-      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd comprehensive technical documentation for full stack architecture\n\nDocuments the complete Sweedle system including backend \\(FastAPI, SQLAlchemy,\nHunyuan3D pipeline, job queue, WebSocket\\), frontend \\(React, Zustand stores,\nAPI clients\\), data flow diagrams, API reference, database schema, and\nconfiguration details.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd comprehensive technical documentation for full stack architecture\n\nDocuments the complete Sweedle system including backend \\(FastAPI, SQLAlchemy,\nHunyuan3D pipeline, job queue, WebSocket\\), frontend \\(React, Zustand stores,\nAPI clients\\), data flow diagrams, API reference, database schema, and\nconfiguration details.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "Bash(git pull:*)",
+      "Bash(git -C \"C:/Claude/Sweedle\" log --oneline -10)",
+      "Bash(systeminfo:*)",
+      "Bash(findstr /B /C:\"OS Name\" /C:\"OS Version\" /C:\"System Type\" /C:\"Total Physical Memory\" /C:\"Available Physical Memory\" /C:\"Virtual Memory\")",
+      "Bash(wmic cpu get Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed /format:list)",
+      "Bash(nvidia-smi:*)",
+      "Bash(wmic diskdrive get Model,Size,MediaType /format:list)",
+      "Bash(powershell:*)",
+      "Bash(cmd.exe /c \"dir C:\\\\Users /b\")",
+      "Bash(echo:*)",
+      "Bash(C:ClaudeSweedlebackendvenvScriptspip.exe install psutil --quiet)",
+      "Bash(set CUDA_LAUNCH_BLOCKING=1)",
+      "Bash(timeout:*)",
+      "Bash(more:*)",
+      "WebFetch(domain:deepwiki.com)",
+      "WebFetch(domain:hunyuan3dai.com)",
+      "Bash(if exist backenddatasweedle.db del backenddatasweedle.db)",
+      "Bash(venvScriptspython.exe:*)"
     ]
   }
 }

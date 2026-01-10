@@ -2,8 +2,9 @@
  * ViewerPanel Component - Complete 3D viewer with toolbar and info
  */
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useViewerStore } from '../../stores/viewerStore';
+import { useRiggingStore } from '../../stores/riggingStore';
 import { GLBViewer } from './GLBViewer';
 import { ViewerToolbar } from './ViewerToolbar';
 import { ModelInfo } from './ModelInfo';
@@ -13,6 +14,7 @@ export function ViewerPanel() {
   const {
     currentModelUrl,
     currentAssetId,
+    modelVersion,
     isLoading,
     loadError,
     settings,
@@ -22,6 +24,15 @@ export function ViewerPanel() {
     clearModel,
     resetCamera,
   } = useViewerStore();
+
+  const { skeletonData, showSkeleton, setShowSkeleton } = useRiggingStore();
+
+  // Build versioned URL for cache-busting
+  const versionedUrl = useMemo(() => {
+    if (!currentModelUrl) return null;
+    const separator = currentModelUrl.includes('?') ? '&' : '?';
+    return `${currentModelUrl}${separator}v=${modelVersion}`;
+  }, [currentModelUrl, modelVersion]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -47,6 +58,12 @@ export function ViewerPanel() {
         case 'r':
           setSetting('autoRotate', !settings.autoRotate);
           break;
+        case 's':
+          // Toggle skeleton visibility (only if skeleton data exists)
+          if (skeletonData) {
+            setShowSkeleton(!showSkeleton);
+          }
+          break;
         case 'home':
           resetCamera();
           break;
@@ -58,7 +75,7 @@ export function ViewerPanel() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [settings, setSetting, resetCamera, clearModel]);
+  }, [settings, setSetting, resetCamera, clearModel, skeletonData, showSkeleton, setShowSkeleton]);
 
   const handleRetry = useCallback(() => {
     if (currentModelUrl) {
@@ -94,10 +111,10 @@ export function ViewerPanel() {
         {!currentModelUrl && !isLoading && !loadError && <EmptyState />}
 
         {/* 3D Viewer */}
-        {currentModelUrl && !loadError && (
+        {versionedUrl && !loadError && (
           <>
             <GLBViewer
-              url={currentModelUrl}
+              url={versionedUrl}
               onError={(error) => setLoadError(error.message)}
             />
             {/* Controls hint - only show when model is loaded */}

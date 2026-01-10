@@ -39,7 +39,7 @@ interface GenerationState {
   reset: () => void;
 
   // Presets
-  applyPreset: (preset: 'fast' | 'balanced' | 'quality') => void;
+  applyPreset: (preset: 'fast' | 'standard' | 'quality') => void;
 }
 
 const defaultParameters: GenerationParameters = {
@@ -56,18 +56,21 @@ const presets: Record<string, Partial<GenerationParameters>> = {
     inferenceSteps: 15,
     guidanceScale: 4.0,
     octreeResolution: 128,
+    generateTexture: true,
     mode: 'fast' as GenerationMode,
   },
-  balanced: {
+  standard: {
     inferenceSteps: 30,
     guidanceScale: 5.5,
     octreeResolution: 256,
+    generateTexture: true,
     mode: 'standard' as GenerationMode,
   },
   quality: {
     inferenceSteps: 50,
     guidanceScale: 7.0,
-    octreeResolution: 512,
+    octreeResolution: 384,  // 384 instead of 512 for VRAM safety
+    generateTexture: true,
     mode: 'quality' as GenerationMode,
   },
 };

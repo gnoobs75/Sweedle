@@ -114,6 +114,9 @@ class Asset(Base):
     has_lod = Column(Boolean, default=False)
     lod_levels = Column(JSON, nullable=True)
 
+    # Texture information
+    has_texture = Column(Boolean, default=False)
+
     # User preferences
     is_favorite = Column(Boolean, default=False)
     rating = Column(Integer, nullable=True)

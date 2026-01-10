@@ -152,6 +152,7 @@ class WebSocketManager:
         status: str = "processing",
         result: Optional[dict] = None,
         error: Optional[str] = None,
+        asset_id: Optional[str] = None,
     ) -> None:
         """Send progress update for a job.
 
@@ -162,6 +163,7 @@ class WebSocketManager:
             status: Job status
             result: Result data (for completed jobs)
             error: Error message (for failed jobs)
+            asset_id: Associated asset ID
         """
         message = {
             "type": "progress",
@@ -170,6 +172,9 @@ class WebSocketManager:
             "stage": stage,
             "status": status,
         }
+
+        if asset_id is not None:
+            message["asset_id"] = asset_id
 
         if result is not None:
             message["result"] = result

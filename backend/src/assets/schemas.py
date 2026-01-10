@@ -42,6 +42,7 @@ class AssetResponse(BaseModel):
     generation_time_seconds: Optional[float] = None
     status: str
     has_lod: bool = False
+    has_texture: bool = False
     lod_levels: Optional[List[int]] = None
     is_favorite: bool = False
     rating: Optional[int] = None

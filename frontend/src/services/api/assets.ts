@@ -55,6 +55,8 @@ function transformAsset(data: Record<string, unknown>): Asset {
     generationTimeSeconds: data.generation_time_seconds as number | undefined,
     status: data.status as string,
     hasLod: data.has_lod as boolean,
+    hasTexture: data.has_texture as boolean,
+    isRigged: data.is_rigged as boolean | undefined,
     lodLevels: data.lod_levels as number[] | undefined,
     isFavorite: data.is_favorite as boolean,
     rating: data.rating as number | undefined,

@@ -21,6 +21,8 @@ from src.core.websocket_manager import WebSocketManager, get_websocket_manager
 from src.inference.config import GenerationConfig, TextureConfig, OutputFormat, GenerationMode
 from src.inference.pipeline import Hunyuan3DPipeline, get_pipeline
 from src.inference.preprocessor import ImagePreprocessor
+from src.database import async_session_maker
+from src.generation.models import Asset, AssetStatus
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +31,8 @@ logger = logging.getLogger(__name__)
 class PreprocessedJob:
     """Holds a job with its preprocessed image data."""
     job: Any  # Job instance from queue
-    processed_image: Image.Image
-    image_path: Path
+    processed_image: Optional[Image.Image]  # None for non-image jobs
+    image_path: Optional[Path]  # None for non-image jobs
     preprocessing_time: float
 
 
@@ -77,6 +79,50 @@ class BackgroundWorker:
     def current_job_id(self) -> Optional[str]:
         """ID of currently processing job."""
         return self._current_job_id
+
+    async def _update_asset_status(
+        self,
+        asset_id: str,
+        status: AssetStatus,
+        result: Optional[dict] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """Update asset status in database.
+
+        Args:
+            asset_id: Asset ID to update
+            status: New status
+            result: Optional generation result with file paths etc.
+            error: Optional error message for failed status
+        """
+        try:
+            async with async_session_maker() as session:
+                from sqlalchemy import select
+                stmt = select(Asset).where(Asset.id == asset_id)
+                db_result = await session.execute(stmt)
+                asset = db_result.scalar_one_or_none()
+
+                if asset:
+                    asset.status = status
+                    if error:
+                        asset.error_message = error
+                    if result:
+                        if result.get("mesh_path"):
+                            asset.file_path = result.get("mesh_path")
+                        if result.get("vertex_count"):
+                            asset.vertex_count = result.get("vertex_count")
+                        if result.get("face_count"):
+                            asset.face_count = result.get("face_count")
+                        if result.get("generation_time"):
+                            asset.generation_time_seconds = result.get("generation_time")
+                        if "has_texture" in result:
+                            asset.has_texture = result.get("has_texture")
+                    await session.commit()
+                    logger.info(f"Updated asset {asset_id} status to {status.value}")
+                else:
+                    logger.warning(f"Asset {asset_id} not found for status update")
+        except Exception as e:
+            logger.error(f"Failed to update asset status: {e}")
 
     async def start(self) -> None:
         """Start the background worker."""
@@ -153,9 +199,21 @@ class BackgroundWorker:
                 if job is None:
                     continue
 
+                # Skip non-image jobs (e.g., rigging jobs don't need image preprocessing)
+                payload = job.payload
+                if "image_path" not in payload:
+                    # Put job directly in GPU queue without preprocessing
+                    preprocessed_job = PreprocessedJob(
+                        job=job,
+                        processed_image=None,  # No preprocessed image
+                        image_path=None,
+                        preprocessing_time=0.0,
+                    )
+                    await self._preprocessing_queue.put(preprocessed_job)
+                    continue
+
                 # Preprocess the image
                 start_time = time.time()
-                payload = job.payload
                 image_path = Path(payload["image_path"])
 
                 # Send preprocessing status
@@ -259,6 +317,8 @@ class BackgroundWorker:
                 result = await self._process_text_to_3d(job)
             elif job.job_type == "rig_asset":
                 result = await self._process_rig_asset(job)
+            elif job.job_type == "add_texture":
+                result = await self._process_add_texture(job)
             else:
                 raise ValueError(f"Unknown job type: {job.job_type}")
 
@@ -271,7 +331,16 @@ class BackgroundWorker:
                     stage="Complete",
                     status="completed",
                     result=result,
+                    asset_id=result.get("asset_id"),
                 )
+
+                # Update asset status in database
+                if result.get("asset_id") and job.job_type in ("image_to_3d", "add_texture"):
+                    await self._update_asset_status(
+                        result["asset_id"],
+                        AssetStatus.COMPLETED,
+                        result=result,
+                    )
 
                 # Send asset ready notification
                 if result.get("asset_id"):
@@ -290,7 +359,16 @@ class BackgroundWorker:
                     stage="Failed",
                     status="failed",
                     error=error,
+                    asset_id=result.get("asset_id"),
                 )
+
+                # Update asset status in database for failures
+                if result.get("asset_id") and job.job_type == "image_to_3d":
+                    await self._update_asset_status(
+                        result["asset_id"],
+                        AssetStatus.FAILED,
+                        error=error,
+                    )
 
         except Exception as e:
             logger.exception(f"Job {job.id} failed: {e}")
@@ -307,6 +385,16 @@ class BackgroundWorker:
 
         # Send updated queue status
         await self._ws_manager.send_queue_status(self._queue.get_status())
+
+        # Clear VRAM after job completes for next job
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
 
     async def _process_job_with_preprocessed(self, preprocessed: PreprocessedJob) -> None:
         """Process a job that has already been preprocessed.
@@ -337,6 +425,10 @@ class BackgroundWorker:
                 )
             elif job.job_type == "text_to_3d":
                 result = await self._process_text_to_3d(job)
+            elif job.job_type == "rig_asset":
+                result = await self._process_rig_asset(job)
+            elif job.job_type == "add_texture":
+                result = await self._process_add_texture(job)
             else:
                 raise ValueError(f"Unknown job type: {job.job_type}")
 
@@ -351,7 +443,16 @@ class BackgroundWorker:
                     stage="Complete",
                     status="completed",
                     result=result,
+                    asset_id=result.get("asset_id"),
                 )
+
+                # Update asset status in database
+                if result.get("asset_id") and job.job_type in ("image_to_3d", "add_texture"):
+                    await self._update_asset_status(
+                        result["asset_id"],
+                        AssetStatus.COMPLETED,
+                        result=result,
+                    )
 
                 # Send asset ready notification
                 if result.get("asset_id"):
@@ -370,7 +471,16 @@ class BackgroundWorker:
                     stage="Failed",
                     status="failed",
                     error=error,
+                    asset_id=result.get("asset_id"),
                 )
+
+                # Update asset status in database for failures
+                if result.get("asset_id") and job.job_type == "image_to_3d":
+                    await self._update_asset_status(
+                        result["asset_id"],
+                        AssetStatus.FAILED,
+                        error=error,
+                    )
 
         except Exception as e:
             logger.exception(f"Job {job.id} failed: {e}")
@@ -387,6 +497,16 @@ class BackgroundWorker:
 
         # Send updated queue status
         await self._ws_manager.send_queue_status(self._queue.get_status())
+
+        # Clear VRAM after job completes for next job
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
 
     async def _process_image_to_3d_with_preprocessed(
         self, job, processed_image: Image.Image
@@ -461,6 +581,7 @@ class BackgroundWorker:
                 "vertex_count": result.vertex_count,
                 "face_count": result.face_count,
                 "generation_time": result.generation_time,
+                "has_texture": config.texture.enabled,
             }
         else:
             return {
@@ -540,6 +661,7 @@ class BackgroundWorker:
                 "vertex_count": result.vertex_count,
                 "face_count": result.face_count,
                 "generation_time": result.generation_time,
+                "has_texture": config.texture.enabled,
             }
         else:
             return {
@@ -564,6 +686,154 @@ class BackgroundWorker:
             "error": "Text-to-3D is not yet implemented",
         }
 
+    async def _process_add_texture(self, job) -> dict:
+        """Add texture to an existing untextured mesh.
+
+        This is called when the user wants to add texture to a shape
+        that was generated with texture disabled (two-step workflow).
+
+        Args:
+            job: Job instance with payload containing:
+                - asset_id: ID of the asset to texture
+                - mesh_path: Path to the existing mesh file
+                - source_image_path: Path to the original source image
+
+        Returns:
+            Result dictionary
+        """
+        payload = job.payload
+        asset_id = payload["asset_id"]
+        mesh_path = Path(payload["mesh_path"])
+        source_image_path = Path(payload["source_image_path"])
+
+        logger.info(f"Adding texture to asset {asset_id}")
+
+        # Ensure pipeline is initialized
+        if not self._pipeline.is_initialized:
+            await self._pipeline.initialize()
+
+        # Get the current event loop for thread-safe scheduling
+        loop = asyncio.get_running_loop()
+
+        # Create progress callback
+        async def progress_callback(progress: float, stage: str):
+            await self._queue.update_progress(job.id, progress, stage)
+            await self._ws_manager.send_progress(
+                job_id=job.id,
+                progress=progress,
+                stage=stage,
+                status="processing",
+            )
+
+        def sync_progress(progress: float, stage: str):
+            asyncio.run_coroutine_threadsafe(progress_callback(progress, stage), loop)
+
+        try:
+            import trimesh
+            from PIL import Image
+
+            sync_progress(0.1, "Loading mesh...")
+
+            # Load the existing mesh
+            loaded = trimesh.load(str(mesh_path))
+
+            # Handle Scene vs Trimesh
+            if isinstance(loaded, trimesh.Scene):
+                # Get all geometry from scene and combine
+                meshes = [g for g in loaded.geometry.values() if isinstance(g, trimesh.Trimesh)]
+                if meshes:
+                    mesh = trimesh.util.concatenate(meshes)
+                else:
+                    raise ValueError("No valid meshes found in GLB file")
+            else:
+                mesh = loaded
+
+            logger.info(f"Loaded mesh with {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+
+            sync_progress(0.2, "Loading source image...")
+
+            # Load the source image
+            source_image = Image.open(source_image_path)
+
+            sync_progress(0.3, "Preparing for texture generation...")
+
+            # Use VRAM manager to unload shape pipeline and free VRAM
+            from src.inference.vram_manager import prepare_for_texture, get_vram_info
+            import gc
+            import torch
+
+            # Unload the shape pipeline to free VRAM for texture
+            logger.info("Unloading shape pipeline to free VRAM...")
+            unload_result = prepare_for_texture(self._pipeline._shape_pipeline)
+            logger.info(f"Shape pipeline unload: freed {unload_result.get('freed_gb', 0):.1f}GB")
+
+            # Delete shape pipeline reference to help GC
+            if hasattr(self._pipeline, '_shape_pipeline') and self._pipeline._shape_pipeline is not None:
+                del self._pipeline._shape_pipeline
+                self._pipeline._shape_pipeline = None
+
+            # Force garbage collection and CUDA cache clear
+            gc.collect()
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+
+            vram_info = get_vram_info()
+            logger.info(f"VRAM after cleanup: {vram_info['free_gb']:.1f}GB free")
+
+            if vram_info['free_gb'] < 18.0:
+                logger.warning(f"Low VRAM for texture generation ({vram_info['free_gb']:.1f}GB free). May fail.")
+
+            sync_progress(0.4, "Generating texture...")
+
+            # Generate texture using the pipeline's texture method
+            textured_mesh = await loop.run_in_executor(
+                None,  # Use default executor
+                self._pipeline._generate_texture,
+                mesh,
+                source_image,
+                GenerationConfig(texture=TextureConfig(enabled=True)),
+                lambda p, m: sync_progress(0.4 + p * 0.5, m),
+            )
+
+            sync_progress(0.9, "Saving textured mesh...")
+
+            # Save the textured mesh back to the same location
+            output_path = mesh_path
+            textured_mesh.export(str(output_path))
+
+            logger.info(f"Saved textured mesh to {output_path}")
+
+            # Update asset in database to mark it as textured
+            async with async_session_maker() as session:
+                from sqlalchemy import select, update
+                from src.generation.models import Asset
+
+                await session.execute(
+                    update(Asset)
+                    .where(Asset.id == asset_id)
+                    .values(has_texture=True)
+                )
+                await session.commit()
+
+            sync_progress(1.0, "Complete")
+
+            return {
+                "success": True,
+                "asset_id": asset_id,
+                "name": payload.get("name", "Untitled"),
+                "mesh_path": str(output_path),
+                "has_texture": True,
+            }
+
+        except Exception as e:
+            logger.exception(f"Add texture failed: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+            }
+
     async def _process_rig_asset(self, job) -> dict:
         """Process auto-rigging job.
 
@@ -575,7 +845,7 @@ class BackgroundWorker:
         """
         from src.rigging.service import get_rigging_service
         from src.rigging.schemas import CharacterType, RiggingProcessor
-        from src.database import async_session_maker
+        # async_session_maker already imported at module level
 
         payload = job.payload
         asset_id = payload["asset_id"]
@@ -583,9 +853,12 @@ class BackgroundWorker:
         character_type = CharacterType(payload.get("character_type", "auto"))
         processor = RiggingProcessor(payload.get("processor", "auto"))
 
-        # Resolve mesh path
-        if not mesh_path.is_absolute():
-            mesh_path = settings.STORAGE_ROOT / mesh_path
+        # Resolve mesh path - file_path is stored relative to working directory
+        # (e.g., "storage/generated/{id}/{id}.glb"), so use as-is
+        if not mesh_path.is_absolute() and not mesh_path.exists():
+            # Try prepending STORAGE_ROOT only if path doesn't exist and doesn't start with storage
+            if not str(mesh_path).startswith("storage"):
+                mesh_path = settings.STORAGE_ROOT / mesh_path
 
         # Output directory (same as asset)
         output_dir = mesh_path.parent / "rigged"
@@ -606,6 +879,17 @@ class BackgroundWorker:
 
         def sync_progress(progress: float, stage: str):
             asyncio.run_coroutine_threadsafe(progress_callback(progress, stage), loop)
+
+        # Clear VRAM before rigging to prevent OOM (UniRig uses GPU)
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                logger.info("Cleared VRAM before rigging")
+        except ImportError:
+            pass
 
         # Run rigging
         async with async_session_maker() as db:

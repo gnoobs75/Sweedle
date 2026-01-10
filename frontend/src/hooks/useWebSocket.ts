@@ -8,7 +8,10 @@ import { useUIStore } from '../stores/uiStore';
 import { useQueueStore } from '../stores/queueStore';
 import { useLibraryStore } from '../stores/libraryStore';
 import { useGenerationStore } from '../stores/generationStore';
-import { useRiggingStore } from '../stores/riggingStore';
+import { useRiggingStore, type CharacterType } from '../stores/riggingStore';
+import { useViewerStore } from '../stores/viewerStore';
+import { getAsset } from '../services/api/assets';
+import { getSkeleton } from '../services/api/rigging';
 import { logger } from '../lib/logger';
 import type { WSMessage, GenerationJob } from '../types';
 
@@ -17,14 +20,16 @@ export function useWebSocket() {
 
   const { setConnected, setConnectionError, addNotification } = useUIStore();
   const { updateJobProgress, updateJobStatus, setQueueStatus, addJob } = useQueueStore();
-  const { addAsset } = useLibraryStore();
+  const { addAsset, updateAsset } = useLibraryStore();
   const { setIsGenerating, setCurrentJobId } = useGenerationStore();
+  const { reloadModel, currentAssetId } = useViewerStore();
   const {
     setProgress: setRiggingProgress,
     setDetectedType,
     setIsRigging,
     setStatus: setRiggingStatus,
     setError: setRiggingError,
+    setSkeletonData,
   } = useRiggingStore();
 
   // Message handler
@@ -46,13 +51,35 @@ export function useWebSocket() {
           if (message.status === 'completed' || message.status === 'failed') {
             logger.info('WebSocket', `Job ${message.status}`, {
               jobId: message.job_id,
-              error: message.error
+              error: message.error,
+              assetId: message.asset_id,
             });
 
             updateJobStatus(message.job_id, message.status, message.error);
             setIsGenerating(false);
 
             if (message.status === 'completed') {
+              // Reload model if it's the current one (for texture updates)
+              if (message.asset_id && message.asset_id === currentAssetId) {
+                logger.info('WebSocket', 'Reloading model after job completion', { assetId: message.asset_id });
+                reloadModel();
+              }
+
+              // Refresh asset data from API to get updated hasTexture, etc.
+              if (message.asset_id) {
+                getAsset(message.asset_id)
+                  .then((updatedAsset) => {
+                    logger.info('WebSocket', 'Refreshed asset after completion', {
+                      assetId: updatedAsset.id,
+                      hasTexture: updatedAsset.hasTexture
+                    });
+                    updateAsset(updatedAsset.id, updatedAsset);
+                  })
+                  .catch((err) => {
+                    logger.error('WebSocket', 'Failed to refresh asset', err);
+                  });
+              }
+
               addNotification({
                 type: 'success',
                 title: 'Generation Complete',
@@ -143,7 +170,7 @@ export function useWebSocket() {
 
           setRiggingProgress(message.progress, message.stage);
           if (message.detected_type) {
-            setDetectedType(message.detected_type);
+            setDetectedType(message.detected_type as CharacterType);
           }
           break;
         }
@@ -158,6 +185,38 @@ export function useWebSocket() {
           setIsRigging(false);
           setRiggingStatus('completed');
           setRiggingProgress(1.0, 'Complete');
+
+          // Load skeleton data from API
+          if (message.asset_id) {
+            getSkeleton(message.asset_id)
+              .then((skeletonResponse) => {
+                if (skeletonResponse) {
+                  logger.info('WebSocket', 'Loaded skeleton data', {
+                    assetId: message.asset_id,
+                    boneCount: skeletonResponse.skeleton.boneCount,
+                  });
+                  setSkeletonData(skeletonResponse.skeleton);
+                }
+              })
+              .catch((err) => {
+                logger.error('WebSocket', 'Failed to load skeleton', err);
+              });
+
+            // Reload model to show rigged version
+            if (message.asset_id === currentAssetId) {
+              logger.info('WebSocket', 'Reloading model after rigging', { assetId: message.asset_id });
+              reloadModel();
+            }
+
+            // Refresh asset data
+            getAsset(message.asset_id)
+              .then((updatedAsset) => {
+                updateAsset(updatedAsset.id, updatedAsset);
+              })
+              .catch((err) => {
+                logger.error('WebSocket', 'Failed to refresh asset after rigging', err);
+              });
+          }
 
           addNotification({
             type: 'success',
@@ -194,11 +253,16 @@ export function useWebSocket() {
       setCurrentJobId,
       setIsGenerating,
       addNotification,
+      addAsset,
+      updateAsset,
+      reloadModel,
+      currentAssetId,
       setRiggingProgress,
       setDetectedType,
       setIsRigging,
       setRiggingStatus,
       setRiggingError,
+      setSkeletonData,
     ]
   );
 

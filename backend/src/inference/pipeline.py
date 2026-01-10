@@ -175,14 +175,10 @@ class Hunyuan3DPipeline:
                             texture_model_path,
                             subfolder='hunyuan3d-paint-v2-0-turbo'
                         )
-                        # Move texture pipeline to GPU if available
-                        if self.device in ("cuda", "mps") and hasattr(self._texture_pipeline, 'to'):
-                            try:
-                                self._texture_pipeline.to(self.device)
-                                logger.info(f"Texture pipeline moved to {self.device.upper()}")
-                            except Exception as e:
-                                logger.warning(f"Could not move texture pipeline to GPU: {e}")
-                        logger.info("Loaded texture pipeline (Hunyuan3D-Paint) from tencent/Hunyuan3D-2")
+                        # Keep texture pipeline on CPU at startup to save VRAM
+                        # It will be moved to GPU on-demand during texture generation
+                        # after shape pipeline is offloaded to CPU
+                        logger.info("Loaded texture pipeline (Hunyuan3D-Paint) from tencent/Hunyuan3D-2 (kept on CPU)")
                     except ImportError as e:
                         logger.warning(f"Texture pipeline import failed: {e}. Texture generation disabled.")
                         self._texture_pipeline = None
@@ -351,7 +347,44 @@ class Hunyuan3DPipeline:
 
             # Step 3: Generate texture if enabled (70-90%)
             if config.texture.enabled and mesh is not None:
-                update_progress(0.70, "Generating texture...")
+                update_progress(0.70, "Offloading shape model to RAM...")
+
+                # Use VRAM manager for proper cleanup
+                from src.inference.vram_manager import prepare_for_texture, get_vram_info
+
+                shape_unloaded = False
+                if self._shape_pipeline is not None and self.device == "cuda":
+                    try:
+                        # Prepare VRAM for texture generation
+                        unload_result = prepare_for_texture(self._shape_pipeline)
+
+                        # Check if we have enough VRAM
+                        vram_info = get_vram_info()
+                        if vram_info['free_gb'] < 16.0:
+                            logger.warning(f"Low VRAM ({vram_info['free_gb']:.1f}GB free). Deleting shape pipeline...")
+                            self._shape_pipeline_deleted = True
+                            del self._shape_pipeline
+                            self._shape_pipeline = None
+
+                            # Force cleanup after deletion
+                            import gc
+                            import torch
+                            gc.collect()
+                            gc.collect()
+                            torch.cuda.empty_cache()
+                            torch.cuda.synchronize()
+
+                            vram_info = get_vram_info()
+                            logger.info(f"After deletion: {vram_info['free_gb']:.1f}GB free")
+
+                        shape_unloaded = True
+
+                    except Exception as e:
+                        logger.warning(f"Could not prepare VRAM for texture: {e}")
+                        import traceback
+                        traceback.print_exc()
+
+                update_progress(0.71, "Generating texture...")
 
                 mesh = await loop.run_in_executor(
                     self._executor,
@@ -362,7 +395,48 @@ class Hunyuan3DPipeline:
                     lambda p, m: update_progress(0.70 + p * 0.20, m),
                 )
 
-                update_progress(0.90, "Texture generated")
+                update_progress(0.89, "Texture generated")
+
+                # Move texture pipeline back to CPU to free VRAM for shape pipeline
+                if self._texture_pipeline is not None and self.device == "cuda":
+                    try:
+                        import torch
+                        self._texture_pipeline.to("cpu")
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        logger.info("Texture pipeline moved back to CPU")
+                    except Exception as e:
+                        logger.warning(f"Could not move texture pipeline to CPU: {e}")
+
+                # Restore shape pipeline for next generation
+                if shape_unloaded:
+                    try:
+                        import torch
+                        gc.collect()
+                        torch.cuda.empty_cache()
+
+                        if self._shape_pipeline is None and getattr(self, '_shape_pipeline_deleted', False):
+                            # Pipeline was deleted - need to reload it
+                            logger.info("Reloading shape pipeline...")
+                            from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
+                            dtype = get_inference_dtype() or torch.bfloat16
+                            self._shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+                                self.model_path,
+                                subfolder=self.subfolder,
+                                torch_dtype=dtype,
+                                use_safetensors=False,
+                            )
+                            self._shape_pipeline.to(self.device)
+                            self._shape_pipeline_deleted = False
+                            logger.info("Shape pipeline reloaded to GPU")
+                        elif self._shape_pipeline is not None:
+                            # Pipeline was moved to CPU - move back to GPU
+                            self._shape_pipeline.to(self.device)
+                            logger.info("Shape pipeline restored to GPU")
+                    except Exception as e:
+                        logger.warning(f"Could not restore shape pipeline: {e}")
+
+                update_progress(0.90, "Processing complete")
             else:
                 update_progress(0.90, "Skipping texture")
 
@@ -442,6 +516,21 @@ class Hunyuan3DPipeline:
 
             mesh = result[0] if isinstance(result, (list, tuple)) else result
 
+            # Force mesh to be CPU-only by converting to trimesh properly
+            # This ensures no GPU tensors are attached to the mesh
+            try:
+                if hasattr(mesh, 'vertices') and hasattr(mesh.vertices, 'cpu'):
+                    # If vertices are tensors, convert to numpy
+                    import numpy as np
+                    vertices = mesh.vertices.cpu().numpy() if hasattr(mesh.vertices, 'cpu') else np.array(mesh.vertices)
+                    faces = mesh.faces.cpu().numpy() if hasattr(mesh.faces, 'cpu') else np.array(mesh.faces)
+
+                    import trimesh
+                    mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+                    logger.info("Converted mesh to CPU-only trimesh")
+            except Exception as e:
+                logger.warning(f"Could not convert mesh to CPU: {e}")
+
             if progress_callback:
                 progress_callback(1.0, "Shape complete")
 
@@ -469,17 +558,150 @@ class Hunyuan3DPipeline:
             import torch
 
             logger.info("Starting texture generation with Hunyuan3D-Paint...")
+
+            # Log VRAM status before texture generation
+            if torch.cuda.is_available():
+                allocated = torch.cuda.memory_allocated(0) / 1e9
+                reserved = torch.cuda.memory_reserved(0) / 1e9
+                total = torch.cuda.get_device_properties(0).total_memory / 1e9
+                free_vram = total - allocated
+                logger.info(f"VRAM before texture: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved, {free_vram:.2f}GB free")
+
+                # Texture pipeline needs ~18GB, warn if not enough
+                if free_vram < 16.0:
+                    logger.warning(f"Only {free_vram:.2f}GB VRAM free - texture pipeline needs ~18GB!")
+                    logger.warning("Texture generation may fail due to insufficient VRAM")
+                    logger.warning("Consider disabling texture or restarting backend for clean VRAM state")
+
+            # Debug: log texture pipeline state
+            logger.info(f"Texture pipeline check: device={self.device}, pipeline is None={self._texture_pipeline is None}, has 'to'={hasattr(self._texture_pipeline, 'to') if self._texture_pipeline else 'N/A'}")
+
+            # Ensure texture pipeline is on GPU
+            if self.device == "cuda" and self._texture_pipeline is not None and hasattr(self._texture_pipeline, 'to'):
+                try:
+                    # Log before moving
+                    logger.info("Moving texture pipeline to CUDA...")
+                    self._texture_pipeline.to("cuda")
+
+                    # Log VRAM after moving
+                    if torch.cuda.is_available():
+                        allocated_after = torch.cuda.memory_allocated(0) / 1e9
+                        logger.info(f"Texture pipeline on CUDA. VRAM now: {allocated_after:.2f}GB allocated")
+                except RuntimeError as e:
+                    if "out of memory" in str(e).lower():
+                        logger.error(f"CUDA OOM when loading texture pipeline: {e}")
+                        logger.error("Texture generation disabled - returning untextured mesh")
+                        if progress_callback:
+                            progress_callback(1.0, "Texture skipped (VRAM full)")
+                        return mesh
+                    raise
+                except Exception as e:
+                    logger.warning(f"Could not move texture pipeline to CUDA: {e}")
+
             if progress_callback:
                 progress_callback(0.1, "Preparing texture generation...")
 
             # Use inference_mode for optimal performance
-            with torch.inference_mode():
-                # Run texture generation
-                # The paint pipeline takes mesh and image, returns textured mesh
-                textured_mesh = self._texture_pipeline(
-                    mesh=mesh,
-                    image=image,
-                )
+            # Final check before calling texture pipeline
+            if self._texture_pipeline is None:
+                logger.error("Texture pipeline is None - cannot generate texture")
+                if progress_callback:
+                    progress_callback(1.0, "Texture skipped (pipeline not available)")
+                return mesh
+
+            logger.info(f"Calling texture pipeline... (type: {type(self._texture_pipeline).__name__})")
+
+            # Log mesh stats before texture generation
+            mesh_vertices = len(mesh.vertices) if hasattr(mesh, 'vertices') else 0
+            mesh_faces = len(mesh.faces) if hasattr(mesh, 'faces') else 0
+            logger.info(f"Mesh stats: {mesh_vertices:,} vertices, {mesh_faces:,} faces")
+
+            # For high-poly meshes, simplify before texture to prevent hangs
+            # The texture pipeline (Hunyuan3DPaintPipeline) struggles with complex meshes
+            MAX_TEXTURE_FACES = 30000  # Safe limit for texture generation
+            if mesh_faces > MAX_TEXTURE_FACES and hasattr(mesh, 'simplify_quadric_decimation'):
+                logger.info(f"Simplifying mesh from {mesh_faces:,} to {MAX_TEXTURE_FACES:,} faces for texture generation")
+                try:
+                    # Create a simplified copy for texture, keep original for final output
+                    texture_mesh = mesh.simplify_quadric_decimation(MAX_TEXTURE_FACES)
+                    simplified_faces = len(texture_mesh.faces) if hasattr(texture_mesh, 'faces') else 0
+                    logger.info(f"Simplified mesh for texture: {simplified_faces:,} faces")
+                    # Use simplified mesh for texture generation
+                    mesh_for_texture = texture_mesh
+                except Exception as e:
+                    logger.warning(f"Mesh simplification failed: {e}, using original mesh")
+                    mesh_for_texture = mesh
+            else:
+                mesh_for_texture = mesh
+
+            # For high-poly meshes, warn that texture might be slow
+            if mesh_faces > 50000:
+                logger.warning(f"High face count ({mesh_faces:,}) - texture may be slow")
+                logger.warning("Consider using Fast quality or lower octree resolution")
+
+            try:
+                with torch.inference_mode():
+                    # Log VRAM right before the call
+                    if torch.cuda.is_available():
+                        allocated = torch.cuda.memory_allocated(0) / 1e9
+                        logger.info(f"VRAM right before texture call: {allocated:.2f}GB")
+
+                    # Run texture generation with progress logging
+                    # The paint pipeline takes mesh and image, returns textured mesh
+                    logger.info("Executing texture pipeline now...")
+
+                    # Use a simple approach - call directly but add periodic heartbeat via thread
+                    import threading
+                    import time as time_module
+
+                    texture_start = time_module.time()
+                    texture_done = threading.Event()
+
+                    def log_heartbeat():
+                        """Log periodic heartbeat to show texture is still running."""
+                        while not texture_done.is_set():
+                            elapsed = time_module.time() - texture_start
+                            if torch.cuda.is_available():
+                                try:
+                                    allocated = torch.cuda.memory_allocated(0) / 1e9
+                                    logger.info(f"Texture generation in progress... {elapsed:.0f}s elapsed, VRAM: {allocated:.2f}GB")
+                                except:
+                                    logger.info(f"Texture generation in progress... {elapsed:.0f}s elapsed")
+                            else:
+                                logger.info(f"Texture generation in progress... {elapsed:.0f}s elapsed")
+                            texture_done.wait(timeout=30)  # Log every 30 seconds
+
+                    # Start heartbeat thread
+                    heartbeat_thread = threading.Thread(target=log_heartbeat, daemon=True)
+                    heartbeat_thread.start()
+
+                    try:
+                        textured_mesh = self._texture_pipeline(
+                            mesh=mesh_for_texture,
+                            image=image,
+                        )
+                    finally:
+                        texture_done.set()
+                        heartbeat_thread.join(timeout=1)
+
+                    texture_elapsed = time_module.time() - texture_start
+                    logger.info(f"Texture pipeline returned after {texture_elapsed:.1f}s")
+
+                    # Force CUDA sync to catch any async errors
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                        logger.info("CUDA synchronized after texture")
+                logger.info("Texture pipeline call completed")
+            except RuntimeError as cuda_error:
+                if "out of memory" in str(cuda_error).lower():
+                    logger.error(f"CUDA OOM during texture generation: {cuda_error}")
+                    # Log memory state
+                    if torch.cuda.is_available():
+                        allocated = torch.cuda.memory_allocated(0) / 1e9
+                        reserved = torch.cuda.memory_reserved(0) / 1e9
+                        total = torch.cuda.get_device_properties(0).total_memory / 1e9
+                        logger.error(f"VRAM state: {allocated:.2f}GB/{total:.2f}GB allocated, {reserved:.2f}GB reserved")
+                raise
 
             if progress_callback:
                 progress_callback(1.0, "Texture generation complete")

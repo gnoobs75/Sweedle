@@ -21,6 +21,9 @@ from src.generation.schemas import (
     QueueStatusResponse,
 )
 from src.generation.service import GenerationService
+from src.generation.image_analyzer import analyze_image
+from PIL import Image
+import io
 
 logger = logging.getLogger(__name__)
 
@@ -296,3 +299,131 @@ async def get_queue_jobs(
         ],
         "total": len(jobs),
     }
+
+
+@router.post("/analyze-image")
+async def analyze_image_quality(
+    file: UploadFile = File(..., description="Image to analyze for 3D generation suitability"),
+):
+    """
+    Analyze an image for 3D generation suitability.
+
+    Returns quality scores and feedback on:
+    - Resolution (optimal: 1024x1024)
+    - Aspect ratio (optimal: square)
+    - Background (optimal: transparent)
+    - Subject centering
+    - Image sharpness
+    - Subject coverage
+    - Contrast/lighting
+
+    Use this before submitting for generation to get feedback on image quality.
+    """
+    # Validate file type
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(400, "File must be an image (PNG, JPG, WEBP)")
+
+    try:
+        # Read image
+        contents = await file.read()
+        image = Image.open(io.BytesIO(contents))
+
+        # Analyze
+        result = analyze_image(image)
+
+        return {
+            "success": True,
+            "analysis": result.to_dict(),
+        }
+
+    except Exception as e:
+        logger.exception(f"Image analysis failed: {e}")
+        raise HTTPException(500, f"Image analysis failed: {str(e)}")
+
+
+@router.post("/add-texture/{asset_id}", response_model=GenerationResponse)
+async def add_texture_to_asset(
+    request: Request,
+    asset_id: str,
+    priority: str = Form("normal", description="Job priority: low, normal, high"),
+    service: GenerationService = Depends(get_service),
+):
+    """
+    Add texture to an existing untextured 3D asset.
+
+    This is for assets generated with texture disabled (shape-only mode).
+    The original source image is used for texture generation.
+
+    Flow:
+    1. Shape-only generation (fast, ~30s)
+    2. Preview the mesh
+    3. If good, call this endpoint to add texture (~90s)
+    """
+    # Get the asset
+    asset = await service.get_asset(asset_id)
+    if not asset:
+        raise HTTPException(404, "Asset not found")
+
+    # Check if asset already has texture
+    if asset.has_texture:
+        raise HTTPException(400, "Asset already has texture")
+
+    # Check if we have the source image
+    if not asset.source_image_path:
+        raise HTTPException(400, "No source image available for texture generation")
+
+    # Create job for texture generation
+    job = await service.create_job(
+        asset_id=asset.id,
+        job_type="add_texture",
+        payload={
+            "asset_id": asset.id,
+            "mesh_path": asset.file_path,
+            "source_image_path": asset.source_image_path,
+            "name": asset.name,
+        },
+    )
+
+    # Get queue and WebSocket manager
+    queue = get_queue()
+    ws_manager = get_websocket_manager()
+
+    # Parse priority
+    priority_map = {
+        "low": JobPriority.LOW,
+        "normal": JobPriority.NORMAL,
+        "high": JobPriority.HIGH,
+    }
+    job_priority = priority_map.get(priority.lower(), JobPriority.NORMAL)
+
+    # Add to queue
+    await queue.enqueue(
+        job_id=job.id,
+        job_type="add_texture",
+        payload={
+            "asset_id": asset.id,
+            "mesh_path": asset.file_path,
+            "source_image_path": asset.source_image_path,
+            "name": asset.name,
+        },
+        priority=job_priority,
+    )
+
+    # Get queue position
+    queue_status = queue.get_status()
+
+    # Send WebSocket notification
+    await ws_manager.send_job_created(
+        job_id=job.id,
+        asset_id=asset.id,
+        job_type="add_texture",
+        position=queue_status["queue_size"],
+    )
+
+    return GenerationResponse(
+        job_id=job.id,
+        asset_id=asset.id,
+        status=JobStatus.PENDING,
+        message="Texture generation queued",
+        queue_position=queue_status["queue_size"],
+    )

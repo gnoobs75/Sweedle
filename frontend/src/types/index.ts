@@ -85,6 +85,8 @@ export interface Asset {
   generationTimeSeconds?: number;
   status: string;
   hasLod: boolean;
+  hasTexture: boolean;
+  isRigged?: boolean;
   lodLevels?: number[];
   isFavorite: boolean;
   rating?: number;
@@ -132,6 +134,7 @@ export type WSMessageType =
 export interface WSProgressMessage {
   type: 'progress';
   job_id: string;
+  asset_id?: string;
   progress: number;
   stage: string;
   status: JobStatus;

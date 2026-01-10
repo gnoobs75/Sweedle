@@ -12,6 +12,7 @@ interface ViewerState {
   currentAssetId: string | null;
   isLoading: boolean;
   loadError: string | null;
+  modelVersion: number; // Cache-busting version
 
   // Model info
   modelInfo: {
@@ -34,6 +35,7 @@ interface ViewerState {
 
   // Actions
   loadModel: (url: string, assetId?: string) => void;
+  reloadModel: () => void; // Reload current model with cache-busting
   clearModel: () => void;
   setLoading: (loading: boolean) => void;
   setLoadError: (error: string | null) => void;
@@ -63,12 +65,13 @@ const defaultCameraTarget: [number, number, number] = [0, 0, 0];
 
 export const useViewerStore = create<ViewerState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       // Initial state
       currentModelUrl: null,
       currentAssetId: null,
       isLoading: false,
       loadError: null,
+      modelVersion: 0,
       modelInfo: {},
       settings: { ...defaultSettings },
       cameraPosition: defaultCameraPosition,
@@ -84,7 +87,21 @@ export const useViewerStore = create<ViewerState>()(
           isLoading: true,
           loadError: null,
           modelInfo: {},
+          modelVersion: Date.now(), // Fresh version
         }),
+
+      reloadModel: () => {
+        const state = get();
+        if (state.currentModelUrl) {
+          // Increment version to force cache-busting
+          set({
+            modelVersion: Date.now(),
+            isLoading: true,
+            loadError: null,
+            modelInfo: {},
+          });
+        }
+      },
 
       clearModel: () =>
         set({
@@ -93,6 +110,7 @@ export const useViewerStore = create<ViewerState>()(
           isLoading: false,
           loadError: null,
           modelInfo: {},
+          modelVersion: 0,
           currentLodLevel: 0,
           availableLodLevels: [],
         }),

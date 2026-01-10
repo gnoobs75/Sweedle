@@ -336,8 +336,13 @@ export function AssetDetails({ asset, onClose, className }: AssetDetailsProps) {
           </div>
 
           {/* Badges */}
-          <div className="flex gap-1 mt-3 pt-3 border-t border-border">
+          <div className="flex gap-1 mt-3 pt-3 border-t border-border flex-wrap">
             {asset.hasLod && <Badge variant="info" size="sm">Has LOD</Badge>}
+            {asset.hasTexture ? (
+              <Badge variant="success" size="sm">Textured</Badge>
+            ) : (
+              <Badge variant="warning" size="sm">No Texture</Badge>
+            )}
             <Badge variant="default" size="sm">{asset.sourceType.replace('_', ' ')}</Badge>
           </div>
         </Card>

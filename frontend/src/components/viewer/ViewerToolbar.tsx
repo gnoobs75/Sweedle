@@ -5,6 +5,9 @@
 import { useState } from 'react';
 import { useViewerStore } from '../../stores/viewerStore';
 import { useRiggingStore } from '../../stores/riggingStore';
+import { useLibraryStore } from '../../stores/libraryStore';
+import { useUIStore } from '../../stores/uiStore';
+import { addTextureToAsset } from '../../services/api/generation';
 import { Button } from '../ui/Button';
 import { Slider } from '../ui/Slider';
 import { Select } from '../ui/Select';
@@ -47,11 +50,46 @@ export function ViewerToolbar({ className }: ViewerToolbarProps) {
     currentLodLevel,
     availableLodLevels,
     setLodLevel,
+    currentAssetId,
   } = useViewerStore();
 
   const { skeletonData, showSkeleton, setShowSkeleton, selectedBone } = useRiggingStore();
+  const { assets, updateAsset } = useLibraryStore();
+  const { openModal, addNotification } = useUIStore();
 
   const [showSettings, setShowSettings] = useState(false);
+  const [isAddingTexture, setIsAddingTexture] = useState(false);
+
+  // Get current asset from library
+  const currentAsset = currentAssetId ? assets.find(a => a.id === currentAssetId) : null;
+
+  const handleOpenRigging = () => {
+    if (currentAssetId) {
+      openModal('rigging', { assetId: currentAssetId });
+    }
+  };
+
+  const handleAddTexture = async () => {
+    if (!currentAssetId) return;
+
+    setIsAddingTexture(true);
+    try {
+      const response = await addTextureToAsset(currentAssetId);
+      addNotification({
+        type: 'success',
+        title: 'Texture Generation Started',
+        message: `Job ${response.jobId.slice(0, 8)}... queued at position ${response.queuePosition || 1}`,
+      });
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        title: 'Failed to Start Texture Generation',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    } finally {
+      setIsAddingTexture(false);
+    }
+  };
 
   return (
     <div className={cn('flex items-center justify-between px-4 h-12', className)}>
@@ -124,6 +162,57 @@ export function ViewerToolbar({ className }: ViewerToolbarProps) {
                   d="M12 4v1m0 14v1m-7-8h1m12 0h1m-2.636-5.364l-.707.707m-9.314 9.314l-.707.707m0-10.728l.707.707m9.314 9.314l.707.707M12 8a4 4 0 100 8 4 4 0 000-8z"
                 />
               </svg>
+            </Button>
+          </Tooltip>
+        )}
+
+        {/* Add Texture button - show when model has no texture */}
+        {currentAsset && !currentAsset.hasTexture && (
+          <Tooltip content="Add Texture - Generate texture for this model" position="bottom">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleAddTexture}
+              disabled={isAddingTexture}
+              className="text-accent-cyan hover:bg-accent-cyan/10"
+            >
+              {isAddingTexture ? (
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                  />
+                </svg>
+              )}
+              <span className="ml-1 text-xs">{isAddingTexture ? 'Adding...' : 'Texture'}</span>
+            </Button>
+          </Tooltip>
+        )}
+
+        {/* Rig Model button - show when model is loaded but not yet rigged */}
+        {currentAssetId && !skeletonData && (
+          <Tooltip content="Rig Model - Add skeleton for animation" position="bottom">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleOpenRigging}
+              className="text-accent-purple hover:bg-accent-purple/10"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"
+                />
+              </svg>
+              <span className="ml-1 text-xs">Rig</span>
             </Button>
           </Tooltip>
         )}

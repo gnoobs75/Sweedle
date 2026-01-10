@@ -6,7 +6,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { useRiggingStore } from '../../stores/riggingStore';
 import { useLibraryStore } from '../../stores/libraryStore';
 import { useViewerStore } from '../../stores/viewerStore';
-import { autoRigAsset, getSkeleton } from '../../services/api/rigging';
+import { autoRigAsset, getSkeleton, resetRigging } from '../../services/api/rigging';
 import { CharacterTypeSelector } from './CharacterTypeSelector';
 import { RiggingProgress } from './RiggingProgress';
 
@@ -46,6 +46,7 @@ export function RiggingPanel({ assetId, onClose, className = '' }: RiggingPanelP
   const targetAsset = assets.find((a) => a.id === targetAssetId);
 
   const [step, setStep] = useState<Step>('config');
+  const [isResetting, setIsResetting] = useState(false);
 
   const handleStartRigging = useCallback(async () => {
     if (!targetAssetId) return;
@@ -60,6 +61,7 @@ export function RiggingPanel({ assetId, onClose, className = '' }: RiggingPanelP
         characterType,
         processor,
         priority: 'normal',
+        force: targetAsset?.isRigged, // Force re-rigging if already rigged
       });
 
       setCurrentJobId(response.jobId);
@@ -68,7 +70,25 @@ export function RiggingPanel({ assetId, onClose, className = '' }: RiggingPanelP
       setStep('error');
       setIsRigging(false);
     }
-  }, [targetAssetId, characterType, processor, setIsRigging, setCurrentJobId, setError]);
+  }, [targetAssetId, targetAsset?.isRigged, characterType, processor, setIsRigging, setCurrentJobId, setError]);
+
+  const handleResetRigging = useCallback(async () => {
+    if (!targetAssetId) return;
+
+    setIsResetting(true);
+    try {
+      await resetRigging(targetAssetId);
+      // Clear skeleton data
+      setSkeletonData(null);
+      setError(null);
+      reset();
+      setStep('config');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to reset rigging');
+    } finally {
+      setIsResetting(false);
+    }
+  }, [targetAssetId, setSkeletonData, setError, reset]);
 
   // Handle completion via WebSocket updates
   useEffect(() => {
@@ -93,7 +113,9 @@ export function RiggingPanel({ assetId, onClose, className = '' }: RiggingPanelP
     }
   }, [error, step]);
 
-  const canRig = targetAssetId && !isRigging && targetAsset && targetAsset.status === 'completed';
+  // Can rig if we have an asset ID and not currently rigging
+  // Asset status check is optional since viewer already loaded the model successfully
+  const canRig = targetAssetId && !isRigging;
 
   return (
     <div className={`flex flex-col h-full bg-surface ${className}`}>
@@ -148,6 +170,20 @@ export function RiggingPanel({ assetId, onClose, className = '' }: RiggingPanelP
                         Already Rigged
                       </span>
                     )}
+                  </div>
+                </div>
+              </div>
+            ) : targetAssetId ? (
+              <div className="p-3 bg-surface-light rounded-lg border border-border">
+                <div className="flex items-center gap-3">
+                  <div className="w-16 h-16 rounded bg-surface flex items-center justify-center">
+                    <svg className="w-8 h-8 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                    </svg>
+                  </div>
+                  <div>
+                    <p className="font-medium text-text-primary">Current Model</p>
+                    <p className="text-sm text-text-muted">Ready for rigging</p>
                   </div>
                 </div>
               </div>
@@ -252,13 +288,24 @@ export function RiggingPanel({ assetId, onClose, className = '' }: RiggingPanelP
       {/* Footer */}
       <div className="p-4 border-t border-border">
         {step === 'config' && (
-          <button
-            onClick={handleStartRigging}
-            disabled={!canRig}
-            className="w-full py-2 px-4 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {targetAsset?.isRigged ? 'Re-Rig Asset' : 'Start Auto-Rigging'}
-          </button>
+          <div className="space-y-2">
+            <button
+              onClick={handleStartRigging}
+              disabled={!canRig}
+              className="w-full py-2 px-4 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {targetAsset?.isRigged ? 'Re-Rig Asset' : 'Start Auto-Rigging'}
+            </button>
+            {targetAsset?.isRigged && (
+              <button
+                onClick={handleResetRigging}
+                disabled={isResetting}
+                className="w-full py-2 px-4 bg-surface-light text-text-secondary rounded-lg font-medium hover:bg-surface-hover disabled:opacity-50 transition-colors"
+              >
+                {isResetting ? 'Resetting...' : 'Reset Rigging State'}
+              </button>
+            )}
+          </div>
         )}
 
         {step === 'complete' && (

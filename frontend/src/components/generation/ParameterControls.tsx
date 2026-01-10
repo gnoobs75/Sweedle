@@ -73,7 +73,7 @@ export function ParameterControls({
           {QUALITY_PRESETS.map((preset) => (
             <button
               key={preset.id}
-              onClick={() => applyPreset(preset.id as 'fast' | 'balanced' | 'quality')}
+              onClick={() => applyPreset(preset.id as 'fast' | 'standard' | 'quality')}
               disabled={disabled}
               className={cn(
                 'flex flex-col items-center gap-1 p-3 rounded-lg border transition-all',
@@ -193,7 +193,7 @@ export function ParameterControls({
         {/* Texture Generation */}
         <Toggle
           label="Generate Texture"
-          description="Apply PBR materials to the model"
+          description="OFF = faster shape-only (add texture later from viewer)"
           checked={parameters.generateTexture}
           onChange={(e) => setParameter('generateTexture', e.target.checked)}
           disabled={disabled}
@@ -250,7 +250,7 @@ export function SimpleParameterControls({
         {QUALITY_PRESETS.map((preset) => (
           <button
             key={preset.id}
-            onClick={() => applyPreset(preset.id as 'fast' | 'balanced' | 'quality')}
+            onClick={() => applyPreset(preset.id as 'fast' | 'standard' | 'quality')}
             disabled={disabled}
             className={cn(
               'flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg border transition-all',

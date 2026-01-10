@@ -17,7 +17,7 @@ from ..config import settings
 from ..database import get_session
 from ..core.queue import get_queue, JobPriority as QueuePriority
 from ..core.websocket_manager import get_websocket_manager
-from ..generation.models import Asset, GenerationJob
+from ..generation.models import Asset, GenerationJob, AssetStatus, JobStatus
 
 from .schemas import (
     CharacterType,
@@ -44,6 +44,7 @@ async def auto_rig_asset(
     character_type: CharacterType = Form(default=CharacterType.AUTO),
     processor: RiggingProcessor = Form(default=RiggingProcessor.AUTO),
     priority: JobPriority = Form(default=JobPriority.NORMAL),
+    force: bool = Form(default=False, description="Force re-rigging even if already rigged"),
     db: AsyncSession = Depends(get_session),
 ):
     """
@@ -51,6 +52,9 @@ async def auto_rig_asset(
 
     Creates a rigging job that will be processed by the background worker.
     Progress updates are sent via WebSocket.
+
+    Args:
+        force: If True, allows re-rigging an already rigged asset
     """
     # Verify asset exists
     result = await db.execute(select(Asset).where(Asset.id == asset_id))
@@ -62,16 +66,17 @@ async def auto_rig_asset(
             detail=f"Asset not found: {asset_id}",
         )
 
-    if asset.status != "completed":
+    if asset.status != AssetStatus.COMPLETED:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Asset is not ready for rigging (status: {asset.status})",
+            detail=f"Asset is not ready for rigging (status: {asset.status.value if hasattr(asset.status, 'value') else asset.status})",
         )
 
-    if asset.is_rigged:
+    # Allow re-rigging if force=True or if skeleton data is missing
+    if asset.is_rigged and not force and asset.rigging_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Asset is already rigged",
+            detail="Asset is already rigged. Use force=True to re-rig.",
         )
 
     # Check if there's an existing rigging job for this asset
@@ -79,7 +84,7 @@ async def auto_rig_asset(
         select(GenerationJob).where(
             GenerationJob.asset_id == asset_id,
             GenerationJob.job_type == "rig_asset",
-            GenerationJob.status.in_(["pending", "processing"]),
+            GenerationJob.status.in_([JobStatus.PENDING, JobStatus.PROCESSING]),
         )
     )
     if existing_job.scalar_one_or_none():
@@ -96,7 +101,7 @@ async def auto_rig_asset(
         asset_id=asset_id,
         job_type="rig_asset",
         priority={"low": 2, "normal": 1, "high": 0}.get(priority.value, 1),
-        status="pending",
+        status=JobStatus.PENDING,
         progress=0.0,
         stage="Queued",
         payload={
@@ -130,7 +135,7 @@ async def auto_rig_asset(
         job_id=job_id,
         asset_id=asset_id,
         job_type="rig_asset",
-        position=await queue.get_position(job_id) or 0,
+        position=0,
     )
 
     logger.info(f"Created rigging job {job_id} for asset {asset_id}")
@@ -140,7 +145,6 @@ async def auto_rig_asset(
         asset_id=asset_id,
         status="pending",
         message="Rigging job queued successfully",
-        queue_position=await queue.get_position(job_id),
     )
 
 
@@ -333,3 +337,38 @@ async def list_templates():
     templates = service.get_templates()
 
     return TemplateListResponse(templates=templates)
+
+
+@router.post("/reset/{asset_id}")
+async def reset_rigging(
+    asset_id: str,
+    db: AsyncSession = Depends(get_session),
+):
+    """Reset the rigging state for an asset.
+
+    Clears is_rigged flag, skeleton data, and rigged mesh path.
+    Use this if rigging failed and left the asset in a bad state.
+    """
+    result = await db.execute(select(Asset).where(Asset.id == asset_id))
+    asset = result.scalar_one_or_none()
+
+    if asset is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Asset not found: {asset_id}",
+        )
+
+    # Clear rigging state
+    asset.is_rigged = False
+    asset.rigging_data = None
+    asset.character_type = None
+    asset.rigged_mesh_path = None
+    asset.rigging_processor = None
+    await db.commit()
+
+    logger.info(f"Reset rigging state for asset {asset_id}")
+
+    return {
+        "message": "Rigging state reset successfully",
+        "asset_id": asset_id,
+    }

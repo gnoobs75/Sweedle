@@ -302,3 +302,69 @@ export async function submitImageTo3D(
     assetId: response.asset_id,
   };
 }
+
+/**
+ * Image quality analysis result types
+ */
+export interface QualityCheck {
+  name: string;
+  passed: boolean;
+  score: number;
+  message: string;
+  suggestion?: string;
+}
+
+export interface ImageAnalysis {
+  overall_score: number;
+  quality_level: 'excellent' | 'good' | 'fair' | 'poor';
+  checks: QualityCheck[];
+  warnings: string[];
+  tips: string[];
+}
+
+/**
+ * Analyze an image for 3D generation suitability
+ */
+export async function analyzeImage(file: File): Promise<ImageAnalysis> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await apiClient.post<{
+    success: boolean;
+    analysis: ImageAnalysis;
+  }>('/generation/analyze-image', formData);
+
+  return response.analysis;
+}
+
+/**
+ * Add texture to an existing untextured asset
+ *
+ * This is for the two-step workflow:
+ * 1. Generate shape only (fast)
+ * 2. Preview and approve
+ * 3. Add texture (this function)
+ */
+export async function addTextureToAsset(
+  assetId: string,
+  priority: 'low' | 'normal' | 'high' = 'normal'
+): Promise<GenerationResponse> {
+  const formData = new FormData();
+  formData.append('priority', priority);
+
+  const response = await apiClient.post<{
+    job_id: string;
+    asset_id: string;
+    status: string;
+    message: string;
+    queue_position?: number;
+  }>(`/generation/add-texture/${assetId}`, formData);
+
+  return {
+    jobId: response.job_id,
+    assetId: response.asset_id,
+    status: response.status as GenerationResponse['status'],
+    message: response.message,
+    queuePosition: response.queue_position,
+  };
+}

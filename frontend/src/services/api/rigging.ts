@@ -10,6 +10,7 @@ export interface AutoRigParams {
   characterType?: CharacterType;
   processor?: RiggingProcessor;
   priority?: 'low' | 'normal' | 'high';
+  force?: boolean;
 }
 
 export interface AutoRigResponse {
@@ -73,6 +74,9 @@ export async function autoRigAsset(params: AutoRigParams): Promise<AutoRigRespon
   if (params.priority) {
     formData.append('priority', params.priority);
   }
+  if (params.force) {
+    formData.append('force', 'true');
+  }
 
   const response = await apiClient.post<{
     job_id: string;
@@ -88,6 +92,19 @@ export async function autoRigAsset(params: AutoRigParams): Promise<AutoRigRespon
     status: response.status,
     message: response.message,
     queuePosition: response.queue_position,
+  };
+}
+
+/**
+ * Reset rigging state for an asset.
+ */
+export async function resetRigging(assetId: string): Promise<{ message: string; assetId: string }> {
+  const response = await apiClient.post<{ message: string; asset_id: string }>(
+    `/rigging/reset/${assetId}`
+  );
+  return {
+    message: response.message,
+    assetId: response.asset_id,
   };
 }
 
