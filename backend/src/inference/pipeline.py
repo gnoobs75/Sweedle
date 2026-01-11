@@ -486,9 +486,17 @@ class Hunyuan3DPipeline:
         """Synchronous shape generation with GPU optimizations."""
         logger.info(f"_generate_shape called - pipeline is None: {self._shape_pipeline is None}, initialized: {self._initialized}, id(self): {id(self)}")
         if self._shape_pipeline is None:
-            # Mock mode - create a simple placeholder mesh
-            logger.warning("Using mock mesh generation")
-            return self._create_mock_mesh()
+            # Shape pipeline was unloaded (e.g., for texture generation)
+            # Reload it before generating
+            logger.info("Shape pipeline is None - reloading...")
+            if progress_callback:
+                progress_callback(0.05, "Reloading shape pipeline...")
+            self._reload_shape_pipeline()
+
+            if self._shape_pipeline is None:
+                # Still None after reload attempt - use mock
+                logger.warning("Failed to reload shape pipeline, using mock mesh generation")
+                return self._create_mock_mesh()
 
         try:
             import torch
@@ -945,6 +953,87 @@ class Hunyuan3DPipeline:
 
         except Exception as e:
             logger.warning(f"Matplotlib thumbnail failed: {e}")
+
+    def _reload_shape_pipeline(self) -> None:
+        """Reload the shape pipeline after it was unloaded for VRAM management.
+
+        This is called when a new generation is requested but the shape pipeline
+        was deleted to make room for texture generation in a previous run.
+        """
+        logger.info("Reloading shape pipeline...")
+
+        try:
+            import torch
+            import gc
+
+            # Ensure VRAM is clean before reload
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+
+                # Log VRAM state
+                allocated = torch.cuda.memory_allocated(0) / 1e9
+                total = torch.cuda.get_device_properties(0).total_memory / 1e9
+                logger.info(f"VRAM before reload: {allocated:.1f}GB / {total:.1f}GB")
+
+            # Get dtype
+            dtype = get_inference_dtype()
+            if dtype is None:
+                dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
+
+            logger.info(f"Loading shape pipeline with dtype: {dtype}")
+
+            # Import and load
+            from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
+
+            try:
+                self._shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+                    self.model_path,
+                    subfolder=self.subfolder,
+                    torch_dtype=dtype,
+                    use_safetensors=False,
+                )
+            except (FileNotFoundError, TypeError) as e:
+                logger.warning(f"First reload attempt failed: {e}, trying alternative...")
+                self._shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+                    self.model_path,
+                    torch_dtype=dtype,
+                )
+
+            # Move to device
+            if self.device in ("cuda", "mps"):
+                device_available = (
+                    (self.device == "cuda" and torch.cuda.is_available()) or
+                    (self.device == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available())
+                )
+
+                if device_available:
+                    self._shape_pipeline.to(self.device)
+                    logger.info(f"Shape pipeline reloaded on {self.device.upper()}")
+                else:
+                    logger.warning(f"{self.device.upper()} not available, using CPU")
+                    self.device = "cpu"
+
+            # Clear the deleted flag
+            self._shape_pipeline_deleted = False
+
+            # Log success
+            if torch.cuda.is_available():
+                allocated = torch.cuda.memory_allocated(0) / 1e9
+                logger.info(f"VRAM after reload: {allocated:.1f}GB")
+
+            logger.info("Shape pipeline reload complete")
+
+        except ImportError as e:
+            logger.error(f"Failed to import hy3dgen for reload: {e}")
+            self._shape_pipeline = None
+
+        except Exception as e:
+            logger.error(f"Shape pipeline reload failed: {e}")
+            import traceback
+            traceback.print_exc()
+            self._shape_pipeline = None
 
     def _create_mock_mesh(self):
         """Create a mock mesh for testing without GPU."""
