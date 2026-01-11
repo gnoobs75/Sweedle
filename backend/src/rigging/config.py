@@ -29,6 +29,12 @@ class RiggingSettings(BaseSettings):
     MAX_VERTICES_FOR_RIGGING: int = 500000
     FALLBACK_TO_BLENDER: bool = True
 
+    # Auto-decimation for game-ready assets
+    # Meshes above this will be simplified before rigging
+    AUTO_DECIMATE_ENABLED: bool = True
+    TARGET_VERTICES_FOR_RIGGING: int = 30000  # Game-friendly default
+    PRESERVE_TEXTURE_UVS: bool = True  # Keep UVs when decimating
+
     # Character detection
     HUMANOID_HEIGHT_RATIO_MIN: float = 1.5  # height/width ratio
     HUMANOID_HEIGHT_RATIO_MAX: float = 4.0

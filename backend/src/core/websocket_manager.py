@@ -321,6 +321,78 @@ class WebSocketManager:
         }
         await self.broadcast(message)
 
+    async def send_rigging_failed(
+        self,
+        asset_id: str,
+        job_id: str,
+        error: str,
+    ) -> None:
+        """Send notification when rigging fails.
+
+        Args:
+            asset_id: Asset ID that failed rigging
+            job_id: Job ID
+            error: Error message
+        """
+        message = {
+            "type": "rigging_failed",
+            "asset_id": asset_id,
+            "job_id": job_id,
+            "error": error,
+        }
+        await self.broadcast(message)
+
+    async def send_workflow_update(
+        self,
+        asset_id: str,
+        stage: str,
+        status: str,
+        progress: float = 0.0,
+        message_text: str = "",
+    ) -> None:
+        """Send workflow stage update.
+
+        Args:
+            asset_id: Asset ID
+            stage: Current workflow stage
+            status: Stage status (started, progress, completed, failed)
+            progress: Progress within stage (0.0-1.0)
+            message_text: Status message
+        """
+        message = {
+            "type": "workflow_update",
+            "asset_id": asset_id,
+            "stage": stage,
+            "status": status,
+            "progress": progress,
+            "message": message_text,
+        }
+        await self.broadcast(message)
+
+    async def send_pipeline_status(
+        self,
+        shape_loaded: bool,
+        texture_loaded: bool,
+        vram_allocated_gb: float,
+        vram_free_gb: float,
+    ) -> None:
+        """Send pipeline/VRAM status update.
+
+        Args:
+            shape_loaded: Whether shape pipeline is loaded
+            texture_loaded: Whether texture pipeline is loaded
+            vram_allocated_gb: Allocated VRAM in GB
+            vram_free_gb: Free VRAM in GB
+        """
+        message = {
+            "type": "pipeline_status",
+            "shape_loaded": shape_loaded,
+            "texture_loaded": texture_loaded,
+            "vram_allocated_gb": vram_allocated_gb,
+            "vram_free_gb": vram_free_gb,
+        }
+        await self.broadcast(message)
+
 
 # Global manager instance
 _manager: Optional[WebSocketManager] = None

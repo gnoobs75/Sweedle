@@ -10,7 +10,8 @@ import { useLibraryStore } from '../stores/libraryStore';
 import { useGenerationStore } from '../stores/generationStore';
 import { useRiggingStore, type CharacterType } from '../stores/riggingStore';
 import { useViewerStore } from '../stores/viewerStore';
-import { getAsset } from '../services/api/assets';
+import { useWorkflowStore } from '../stores/workflowStore';
+import { getAsset, getAssetModelUrl } from '../services/api/assets';
 import { getSkeleton } from '../services/api/rigging';
 import { logger } from '../lib/logger';
 import type { WSMessage, GenerationJob } from '../types';
@@ -22,7 +23,7 @@ export function useWebSocket() {
   const { updateJobProgress, updateJobStatus, setQueueStatus, addJob } = useQueueStore();
   const { addAsset, updateAsset } = useLibraryStore();
   const { setIsGenerating, setCurrentJobId } = useGenerationStore();
-  const { reloadModel, currentAssetId } = useViewerStore();
+  const { reloadModel, loadModel, currentAssetId } = useViewerStore();
   const {
     setProgress: setRiggingProgress,
     setDetectedType,
@@ -31,6 +32,14 @@ export function useWebSocket() {
     setError: setRiggingError,
     setSkeletonData,
   } = useRiggingStore();
+  const {
+    activeAssetId: workflowAssetId,
+    currentStage: workflowCurrentStage,
+    setProgress: setWorkflowProgress,
+    setStageStatus,
+    setPipelineStatus,
+    setProcessing: setWorkflowProcessing,
+  } = useWorkflowStore();
 
   // Message handler
   const handleMessage = useCallback(
@@ -48,6 +57,11 @@ export function useWebSocket() {
 
           updateJobProgress(message.job_id, message.progress, message.stage);
 
+          // Update workflow store if this is the active workflow
+          if (message.asset_id === workflowAssetId) {
+            setWorkflowProgress(message.progress, message.stage || 'Processing...');
+          }
+
           if (message.status === 'completed' || message.status === 'failed') {
             logger.info('WebSocket', `Job ${message.status}`, {
               jobId: message.job_id,
@@ -63,6 +77,23 @@ export function useWebSocket() {
               if (message.asset_id && message.asset_id === currentAssetId) {
                 logger.info('WebSocket', 'Reloading model after job completion', { assetId: message.asset_id });
                 reloadModel();
+              }
+
+              // Update workflow store if this is the active workflow
+              if (message.asset_id === workflowAssetId) {
+                setWorkflowProcessing(false);
+                // Update the current stage (mesh or texture depending on what's processing)
+                const completedStage = workflowCurrentStage === 'texture' ? 'texture' : 'mesh';
+                setStageStatus(completedStage, 'completed');
+                setWorkflowProgress(1.0, 'Complete');
+
+                // Load the generated model in the viewer automatically
+                const modelUrl = getAssetModelUrl(message.asset_id);
+                logger.info('WebSocket', 'Loading workflow model into viewer', {
+                  assetId: message.asset_id,
+                  modelUrl
+                });
+                loadModel(modelUrl, message.asset_id);
               }
 
               // Refresh asset data from API to get updated hasTexture, etc.
@@ -86,6 +117,14 @@ export function useWebSocket() {
                 message: 'Your 3D model is ready!',
               });
             } else if (message.status === 'failed') {
+              // Update workflow store if this is the active workflow
+              if (message.asset_id === workflowAssetId) {
+                setWorkflowProcessing(false);
+                // Update the current stage (mesh or texture depending on what's processing)
+                const failedStage = workflowCurrentStage === 'texture' ? 'texture' : 'mesh';
+                setStageStatus(failedStage, 'failed', message.error);
+              }
+
               addNotification({
                 type: 'error',
                 title: 'Generation Failed',
@@ -218,6 +257,21 @@ export function useWebSocket() {
               });
           }
 
+          // Update workflow store if this is the active workflow
+          if (message.asset_id === workflowAssetId) {
+            setWorkflowProcessing(false);
+            setStageStatus('rigging', 'completed');
+            setWorkflowProgress(1.0, 'Complete');
+
+            // Reload model to show rigged version
+            const modelUrl = getAssetModelUrl(message.asset_id);
+            logger.info('WebSocket', 'Loading rigged model into viewer', {
+              assetId: message.asset_id,
+              modelUrl
+            });
+            loadModel(modelUrl, message.asset_id);
+          }
+
           addNotification({
             type: 'success',
             title: 'Rigging Complete',
@@ -236,10 +290,75 @@ export function useWebSocket() {
           setRiggingStatus('failed');
           setRiggingError(message.error || 'Rigging failed');
 
+          // Update workflow store if this is the active workflow
+          if (message.asset_id === workflowAssetId) {
+            setWorkflowProcessing(false);
+            setStageStatus('rigging', 'failed', message.error);
+          }
+
           addNotification({
             type: 'error',
             title: 'Rigging Failed',
             message: message.error || 'An error occurred during rigging',
+          });
+          break;
+        }
+
+        case 'workflow_update': {
+          logger.info('WebSocket', 'Workflow update', {
+            assetId: message.asset_id,
+            stage: message.stage,
+            status: message.status,
+            progress: message.progress,
+          });
+
+          // Only process if this is for the active workflow asset
+          if (message.asset_id === workflowAssetId) {
+            // Map backend stage to frontend stage
+            const stageMap: Record<string, 'upload' | 'mesh' | 'texture' | 'rigging' | 'export'> = {
+              'uploaded': 'upload',
+              'mesh_generated': 'mesh',
+              'mesh_approved': 'mesh',
+              'textured': 'texture',
+              'texture_approved': 'texture',
+              'rigged': 'rigging',
+              'exported': 'export',
+            };
+            const frontendStage = stageMap[message.stage] || 'upload';
+
+            // Map status
+            const statusMap: Record<string, 'pending' | 'processing' | 'completed' | 'approved' | 'skipped' | 'failed'> = {
+              'started': 'processing',
+              'progress': 'processing',
+              'completed': 'completed',
+              'approved': 'approved',
+              'failed': 'failed',
+              'advanced': 'completed',
+              'skipped_to_export': 'skipped',
+            };
+            const frontendStatus = statusMap[message.status] || 'pending';
+
+            setStageStatus(frontendStage, frontendStatus);
+            if (message.progress !== undefined) {
+              setWorkflowProgress(message.progress, message.message || '');
+            }
+          }
+          break;
+        }
+
+        case 'pipeline_status': {
+          logger.debug('WebSocket', 'Pipeline status update', {
+            shapeLoaded: message.shape_loaded,
+            textureLoaded: message.texture_loaded,
+            vramAllocated: message.vram_allocated_gb,
+            vramFree: message.vram_free_gb,
+          });
+
+          setPipelineStatus({
+            shapeLoaded: message.shape_loaded,
+            textureLoaded: message.texture_loaded,
+            vramAllocatedGb: message.vram_allocated_gb,
+            vramFreeGb: message.vram_free_gb,
           });
           break;
         }
@@ -256,6 +375,7 @@ export function useWebSocket() {
       addAsset,
       updateAsset,
       reloadModel,
+      loadModel,
       currentAssetId,
       setRiggingProgress,
       setDetectedType,
@@ -263,6 +383,12 @@ export function useWebSocket() {
       setRiggingStatus,
       setRiggingError,
       setSkeletonData,
+      workflowAssetId,
+      workflowCurrentStage,
+      setWorkflowProgress,
+      setStageStatus,
+      setPipelineStatus,
+      setWorkflowProcessing,
     ]
   );
 

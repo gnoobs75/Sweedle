@@ -656,23 +656,54 @@ class Hunyuan3DPipeline:
 
                     texture_start = time_module.time()
                     texture_done = threading.Event()
+                    progress_count = [0]  # Mutable counter for progress updates
 
-                    def log_heartbeat():
-                        """Log periodic heartbeat to show texture is still running."""
+                    def heartbeat_with_progress():
+                        """Send periodic progress updates during texture generation."""
+                        # Texture typically takes 60-180 seconds
+                        # We'll estimate progress based on elapsed time
+                        ESTIMATED_TOTAL_SECONDS = 120.0  # Rough estimate
+                        UPDATE_INTERVAL = 5  # Update every 5 seconds for smooth progress
+
                         while not texture_done.is_set():
                             elapsed = time_module.time() - texture_start
+                            progress_count[0] += 1
+
+                            # Calculate estimated progress (cap at 0.95 to leave room for completion)
+                            estimated_progress = min(0.95, elapsed / ESTIMATED_TOTAL_SECONDS)
+
+                            # Build status message with elapsed time
+                            minutes = int(elapsed // 60)
+                            seconds = int(elapsed % 60)
+                            if minutes > 0:
+                                time_str = f"{minutes}m {seconds}s"
+                            else:
+                                time_str = f"{seconds}s"
+
                             if torch.cuda.is_available():
                                 try:
                                     allocated = torch.cuda.memory_allocated(0) / 1e9
-                                    logger.info(f"Texture generation in progress... {elapsed:.0f}s elapsed, VRAM: {allocated:.2f}GB")
+                                    status_msg = f"Generating texture... {time_str} (VRAM: {allocated:.1f}GB)"
                                 except:
-                                    logger.info(f"Texture generation in progress... {elapsed:.0f}s elapsed")
+                                    status_msg = f"Generating texture... {time_str}"
                             else:
-                                logger.info(f"Texture generation in progress... {elapsed:.0f}s elapsed")
-                            texture_done.wait(timeout=30)  # Log every 30 seconds
+                                status_msg = f"Generating texture... {time_str}"
+
+                            logger.info(status_msg)
+
+                            # Send progress callback if available
+                            if progress_callback:
+                                try:
+                                    # Map to 0.1-0.95 range (leaving room for start/end)
+                                    callback_progress = 0.1 + (estimated_progress * 0.85)
+                                    progress_callback(callback_progress, status_msg)
+                                except Exception as e:
+                                    logger.warning(f"Progress callback failed: {e}")
+
+                            texture_done.wait(timeout=UPDATE_INTERVAL)
 
                     # Start heartbeat thread
-                    heartbeat_thread = threading.Thread(target=log_heartbeat, daemon=True)
+                    heartbeat_thread = threading.Thread(target=heartbeat_with_progress, daemon=True)
                     heartbeat_thread.start()
 
                     try:
@@ -739,36 +770,181 @@ class Hunyuan3DPipeline:
             logger.error("No mesh to save")
             return 0, 0
 
-        # Apply face count limit if specified
-        if config.face_count and hasattr(mesh, 'faces'):
-            if len(mesh.faces) > config.face_count:
-                try:
-                    mesh = mesh.simplify_quadric_decimation(config.face_count)
-                    logger.info(f"Simplified mesh to {config.face_count} faces")
-                except Exception as e:
-                    logger.warning(f"Simplification failed: {e}")
+        # Log mesh type for debugging
+        logger.info(f"Mesh type: {type(mesh).__name__}")
 
-        # Get counts
-        vertex_count = len(mesh.vertices) if hasattr(mesh, 'vertices') else 0
-        face_count = len(mesh.faces) if hasattr(mesh, 'faces') else 0
+        # Convert Scene to single mesh if needed for decimation
+        working_mesh = mesh
+        is_scene = isinstance(mesh, trimesh.Scene)
+
+        if is_scene:
+            # Combine all geometries into single mesh for decimation
+            try:
+                geometries = list(mesh.geometry.values())
+                if geometries:
+                    working_mesh = trimesh.util.concatenate(geometries)
+                    logger.info(f"Combined {len(geometries)} geometries into single mesh")
+            except Exception as e:
+                logger.warning(f"Could not combine scene geometries: {e}")
+                # Try to get the first geometry
+                if mesh.geometry:
+                    working_mesh = list(mesh.geometry.values())[0]
+
+        # Get initial counts
+        initial_faces = len(working_mesh.faces) if hasattr(working_mesh, 'faces') else 0
+        logger.info(f"Initial mesh: {initial_faces:,} faces, target: {config.face_count or 'none'}")
+
+        # Apply face count limit if specified
+        if config.face_count and hasattr(working_mesh, 'faces'):
+            current_faces = len(working_mesh.faces)
+            if current_faces > config.face_count:
+                try:
+                    # Calculate reduction ratio (fraction to REDUCE by, not keep)
+                    # e.g., going from 77k to 10k = reduce by 87% = 0.87
+                    target_reduction = 1.0 - (config.face_count / current_faces)
+                    target_reduction = max(0.01, min(0.99, target_reduction))  # Clamp to valid range
+                    logger.info(f"Decimating: {current_faces:,} -> ~{config.face_count:,} faces (reducing by {target_reduction:.1%})")
+
+                    # Use target_reduction parameter (fraction to reduce BY)
+                    working_mesh = working_mesh.simplify_quadric_decimation(target_reduction)
+
+                    final_faces = len(working_mesh.faces) if hasattr(working_mesh, 'faces') else 0
+                    logger.info(f"Decimated mesh: {current_faces:,} -> {final_faces:,} faces")
+                    # Use decimated mesh for saving
+                    mesh = working_mesh
+                except Exception as e:
+                    logger.warning(f"Decimation failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                logger.info(f"No decimation needed: {current_faces:,} faces <= {config.face_count:,} target")
+
+        # Get final counts from the mesh we'll save
+        if hasattr(mesh, 'vertices'):
+            vertex_count = len(mesh.vertices)
+        elif isinstance(mesh, trimesh.Scene):
+            vertex_count = sum(len(g.vertices) for g in mesh.geometry.values() if hasattr(g, 'vertices'))
+        else:
+            vertex_count = 0
+
+        if hasattr(mesh, 'faces'):
+            face_count = len(mesh.faces)
+        elif isinstance(mesh, trimesh.Scene):
+            face_count = sum(len(g.faces) for g in mesh.geometry.values() if hasattr(g, 'faces'))
+        else:
+            face_count = 0
+
+        logger.info(f"Final mesh: {vertex_count:,} vertices, {face_count:,} faces")
 
         # Save mesh
         output_path.parent.mkdir(parents=True, exist_ok=True)
         mesh.export(str(output_path))
         logger.info(f"Saved mesh to {output_path}")
 
-        # Generate thumbnail
+        # Generate thumbnail using matplotlib-based renderer (works headlessly)
         try:
-            scene = mesh.scene() if hasattr(mesh, 'scene') else trimesh.Scene(mesh)
-            png_data = scene.save_image(resolution=(256, 256))
-            if png_data:
-                with open(thumbnail_path, 'wb') as f:
-                    f.write(png_data)
-                logger.info(f"Saved thumbnail to {thumbnail_path}")
+            self._generate_thumbnail_matplotlib(mesh, thumbnail_path)
         except Exception as e:
             logger.warning(f"Thumbnail generation failed: {e}")
 
         return vertex_count, face_count
+
+    def _generate_thumbnail_matplotlib(
+        self,
+        mesh,
+        thumbnail_path: Path,
+        width: int = 256,
+        height: int = 256,
+    ) -> None:
+        """Generate thumbnail using matplotlib (works headlessly on Windows)."""
+        try:
+            import matplotlib
+            matplotlib.use('Agg')  # Headless backend
+            import matplotlib.pyplot as plt
+            from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+            import numpy as np
+            from PIL import Image
+            import io
+
+            # Get vertices and faces
+            if hasattr(mesh, 'geometry') and mesh.geometry:
+                all_vertices = []
+                all_faces = []
+                offset = 0
+                for geom in mesh.geometry.values():
+                    if hasattr(geom, 'vertices') and hasattr(geom, 'faces'):
+                        all_vertices.append(geom.vertices)
+                        all_faces.append(geom.faces + offset)
+                        offset += len(geom.vertices)
+                if all_vertices:
+                    vertices = np.vstack(all_vertices)
+                    faces = np.vstack(all_faces)
+                else:
+                    logger.warning("No geometry found for thumbnail")
+                    return
+            else:
+                vertices = mesh.vertices
+                faces = mesh.faces
+
+            # Create figure
+            fig = plt.figure(figsize=(width/100, height/100), dpi=100)
+            ax = fig.add_subplot(111, projection='3d')
+
+            # Dark background
+            bg_color = (0.1, 0.1, 0.12)
+            ax.set_facecolor(bg_color)
+            fig.patch.set_facecolor(bg_color)
+
+            # Subsample faces for performance
+            max_faces = 5000
+            if len(faces) > max_faces:
+                indices = np.random.choice(len(faces), max_faces, replace=False)
+                faces_sample = faces[indices]
+            else:
+                faces_sample = faces
+
+            # Create polygon collection
+            poly3d = [[vertices[idx] for idx in face] for face in faces_sample]
+            collection = Poly3DCollection(poly3d, alpha=0.9, linewidth=0.1, edgecolor='#444444')
+            collection.set_facecolor('#6366f1')  # Indigo color
+            ax.add_collection3d(collection)
+
+            # Auto-scale
+            max_range = np.array([
+                vertices[:, 0].max() - vertices[:, 0].min(),
+                vertices[:, 1].max() - vertices[:, 1].min(),
+                vertices[:, 2].max() - vertices[:, 2].min()
+            ]).max() / 2.0
+
+            mid_x = (vertices[:, 0].max() + vertices[:, 0].min()) * 0.5
+            mid_y = (vertices[:, 1].max() + vertices[:, 1].min()) * 0.5
+            mid_z = (vertices[:, 2].max() + vertices[:, 2].min()) * 0.5
+
+            ax.set_xlim(mid_x - max_range, mid_x + max_range)
+            ax.set_ylim(mid_y - max_range, mid_y + max_range)
+            ax.set_zlim(mid_z - max_range, mid_z + max_range)
+
+            # Set camera angle (30 degrees pitch, 45 degrees yaw)
+            ax.view_init(elev=30, azim=45)
+
+            # Hide axes
+            ax.set_axis_off()
+
+            # Render to file
+            thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(str(thumbnail_path), format='png', facecolor=fig.get_facecolor(),
+                       edgecolor='none', bbox_inches='tight', pad_inches=0, dpi=100)
+            plt.close(fig)
+
+            # Resize to exact dimensions
+            img = Image.open(thumbnail_path)
+            img = img.resize((width, height), Image.Resampling.LANCZOS)
+            img.save(thumbnail_path)
+
+            logger.info(f"Generated thumbnail: {thumbnail_path}")
+
+        except Exception as e:
+            logger.warning(f"Matplotlib thumbnail failed: {e}")
 
     def _create_mock_mesh(self):
         """Create a mock mesh for testing without GPU."""

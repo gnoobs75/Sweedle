@@ -119,6 +119,17 @@ export interface QueueStatus {
   failedCount: number;
 }
 
+// Workflow Types
+export type WorkflowStageType = 'upload' | 'mesh' | 'texture' | 'rigging' | 'export';
+export type BackendWorkflowStage =
+  | 'uploaded'
+  | 'mesh_generated'
+  | 'mesh_approved'
+  | 'textured'
+  | 'texture_approved'
+  | 'rigged'
+  | 'exported';
+
 // WebSocket Message Types
 export type WSMessageType =
   | 'progress'
@@ -129,7 +140,9 @@ export type WSMessageType =
   | 'pong'
   | 'rigging_progress'
   | 'rigging_complete'
-  | 'rigging_failed';
+  | 'rigging_failed'
+  | 'workflow_update'
+  | 'pipeline_status';
 
 export interface WSProgressMessage {
   type: 'progress';
@@ -196,6 +209,23 @@ export interface WSRiggingFailedMessage {
   error: string;
 }
 
+export interface WSWorkflowUpdateMessage {
+  type: 'workflow_update';
+  asset_id: string;
+  stage: BackendWorkflowStage;
+  status: string;
+  progress?: number;
+  message?: string;
+}
+
+export interface WSPipelineStatusMessage {
+  type: 'pipeline_status';
+  shape_loaded: boolean;
+  texture_loaded: boolean;
+  vram_allocated_gb: number;
+  vram_free_gb: number;
+}
+
 export type WSMessage =
   | WSProgressMessage
   | WSQueueStatusMessage
@@ -205,6 +235,8 @@ export type WSMessage =
   | WSRiggingProgressMessage
   | WSRiggingCompleteMessage
   | WSRiggingFailedMessage
+  | WSWorkflowUpdateMessage
+  | WSPipelineStatusMessage
   | { type: 'pong' };
 
 // Viewer Types

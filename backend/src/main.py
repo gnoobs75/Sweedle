@@ -138,6 +138,62 @@ async def health_check():
     }
 
 
+# Readiness endpoint - tells frontend when backend is fully ready
+@app.get("/api/ready")
+async def readiness_check():
+    """Check if backend is fully initialized and ready for requests.
+
+    Frontend should poll this until ready=true before showing the main UI.
+    """
+    from src.core.device import get_device_info
+    from src.inference.pipeline import get_pipeline
+
+    # Check core components
+    worker_ready = app.state.worker is not None and app.state.worker.is_running
+    queue_ready = app.state.job_queue is not None
+    ws_ready = app.state.ws_manager is not None
+
+    # Check pipeline is initialized (not necessarily loaded to GPU yet)
+    pipeline = get_pipeline()
+    pipeline_initialized = pipeline is not None
+
+    # Check GPU availability
+    device_info = get_device_info()
+    gpu_available = device_info.get("cuda_available", False)
+
+    # All systems go?
+    ready = all([worker_ready, queue_ready, ws_ready, pipeline_initialized])
+
+    # Get loading status message
+    if not queue_ready:
+        status_message = "Initializing job queue..."
+    elif not ws_ready:
+        status_message = "Initializing WebSocket..."
+    elif not pipeline_initialized:
+        status_message = "Loading AI models..."
+    elif not worker_ready:
+        status_message = "Starting background worker..."
+    else:
+        status_message = "Ready"
+
+    return {
+        "ready": ready,
+        "status_message": status_message,
+        "components": {
+            "worker": worker_ready,
+            "queue": queue_ready,
+            "websocket": ws_ready,
+            "pipeline": pipeline_initialized,
+            "gpu": gpu_available,
+        },
+        "gpu": {
+            "available": gpu_available,
+            "name": device_info.get("gpu_name", "Unknown"),
+            "vram_gb": device_info.get("gpu_memory_gb", 0),
+        } if gpu_available else None,
+    }
+
+
 # Device info endpoint
 @app.get("/api/device/info")
 async def device_info():
@@ -265,12 +321,16 @@ from src.websocket.router import router as websocket_router
 from src.assets.router import router as assets_router
 from src.export.router import router as export_router
 from src.rigging.router import router as rigging_router
+from src.pipeline.router import router as pipeline_router
+from src.workflow.router import router as workflow_router
 
 app.include_router(generation_router, prefix="/api/generation", tags=["Generation"])
 app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
 app.include_router(assets_router, prefix="/api/assets", tags=["Assets"])
 app.include_router(export_router, prefix="/api/export", tags=["Export"])
 app.include_router(rigging_router, prefix="/api", tags=["Rigging"])
+app.include_router(pipeline_router, tags=["Pipeline"])
+app.include_router(workflow_router, tags=["Workflow"])
 
 
 # Serve frontend static files

@@ -109,6 +109,8 @@ class BackgroundWorker:
                     if result:
                         if result.get("mesh_path"):
                             asset.file_path = result.get("mesh_path")
+                        if result.get("thumbnail_path"):
+                            asset.thumbnail_path = result.get("thumbnail_path")
                         if result.get("vertex_count"):
                             asset.vertex_count = result.get("vertex_count")
                         if result.get("face_count"):
@@ -342,6 +344,14 @@ class BackgroundWorker:
                         result=result,
                     )
 
+                # Send rigging-specific completion message
+                if job.job_type == "rig_asset" and result.get("asset_id"):
+                    await self._ws_manager.send_rigging_complete(
+                        asset_id=result["asset_id"],
+                        character_type=result.get("character_type", "unknown"),
+                        bone_count=result.get("bone_count", 0),
+                    )
+
                 # Send asset ready notification
                 if result.get("asset_id"):
                     await self._ws_manager.send_asset_ready(
@@ -361,6 +371,14 @@ class BackgroundWorker:
                     error=error,
                     asset_id=result.get("asset_id"),
                 )
+
+                # Send rigging-specific failure message
+                if job.job_type == "rig_asset" and result.get("asset_id"):
+                    await self._ws_manager.send_rigging_failed(
+                        asset_id=result["asset_id"],
+                        job_id=job.id,
+                        error=error,
+                    )
 
                 # Update asset status in database for failures
                 if result.get("asset_id") and job.job_type == "image_to_3d":
@@ -454,6 +472,14 @@ class BackgroundWorker:
                         result=result,
                     )
 
+                # Send rigging-specific completion message
+                if job.job_type == "rig_asset" and result.get("asset_id"):
+                    await self._ws_manager.send_rigging_complete(
+                        asset_id=result["asset_id"],
+                        character_type=result.get("character_type", "unknown"),
+                        bone_count=result.get("bone_count", 0),
+                    )
+
                 # Send asset ready notification
                 if result.get("asset_id"):
                     await self._ws_manager.send_asset_ready(
@@ -473,6 +499,14 @@ class BackgroundWorker:
                     error=error,
                     asset_id=result.get("asset_id"),
                 )
+
+                # Send rigging-specific failure message
+                if job.job_type == "rig_asset" and result.get("asset_id"):
+                    await self._ws_manager.send_rigging_failed(
+                        asset_id=result["asset_id"],
+                        job_id=job.id,
+                        error=error,
+                    )
 
                 # Update asset status in database for failures
                 if result.get("asset_id") and job.job_type == "image_to_3d":
@@ -576,6 +610,7 @@ class BackgroundWorker:
                 "asset_id": asset_id,
                 "name": payload.get("name", "Untitled"),
                 "mesh_path": str(result.mesh_path) if result.mesh_path else None,
+                "thumbnail_path": str(result.thumbnail_path) if result.thumbnail_path else None,
                 "thumbnail_url": f"/storage/generated/{asset_id}/thumbnail.png",
                 "download_url": f"/storage/generated/{asset_id}/{asset_id}.glb",
                 "vertex_count": result.vertex_count,
@@ -656,6 +691,7 @@ class BackgroundWorker:
                 "asset_id": asset_id,
                 "name": payload.get("name", "Untitled"),
                 "mesh_path": str(result.mesh_path) if result.mesh_path else None,
+                "thumbnail_path": str(result.thumbnail_path) if result.thumbnail_path else None,
                 "thumbnail_url": f"/storage/generated/{asset_id}/thumbnail.png",
                 "download_url": f"/storage/generated/{asset_id}/{asset_id}.glb",
                 "vertex_count": result.vertex_count,

@@ -89,9 +89,19 @@ class RiggingService:
         logger.info(f"Starting auto-rig for asset {asset_id}")
         logger.info(f"Mesh: {mesh_path}, Type: {character_type}, Processor: {processor}")
 
+        # Auto-decimate if needed for game-ready assets
+        actual_mesh_path = mesh_path
+        if rigging_settings.AUTO_DECIMATE_ENABLED:
+            actual_mesh_path = await self._auto_decimate_if_needed(
+                mesh_path=mesh_path,
+                output_dir=output_dir,
+                target_vertices=rigging_settings.TARGET_VERTICES_FOR_RIGGING,
+                progress_callback=progress_callback,
+            )
+
         # Detect character type if auto
         if character_type == CharacterType.AUTO:
-            detected_type, confidence = await self.detect_character_type(mesh_path)
+            detected_type, confidence = await self.detect_character_type(actual_mesh_path)
             character_type = detected_type
             logger.info(f"Detected character type: {character_type} (confidence: {confidence:.2f})")
 
@@ -101,13 +111,80 @@ class RiggingService:
 
         # Run rigging
         result = await selected_processor.process(
-            mesh_path=mesh_path,
+            mesh_path=actual_mesh_path,
             character_type=character_type,
             output_dir=output_dir,
             progress_callback=progress_callback,
         )
 
         return result
+
+    async def _auto_decimate_if_needed(
+        self,
+        mesh_path: Path,
+        output_dir: Path,
+        target_vertices: int,
+        progress_callback: Optional[Callable[[float, str], None]] = None,
+    ) -> Path:
+        """
+        Auto-decimate mesh if it exceeds target vertex count.
+
+        Args:
+            mesh_path: Original mesh path
+            output_dir: Output directory
+            target_vertices: Target vertex count
+            progress_callback: Progress callback
+
+        Returns:
+            Path to decimated mesh (or original if no decimation needed)
+        """
+        try:
+            import trimesh
+
+            # Load mesh to check vertex count
+            mesh = trimesh.load(str(mesh_path), force='mesh')
+            original_vertices = len(mesh.vertices)
+
+            if original_vertices <= target_vertices:
+                logger.info(f"Mesh has {original_vertices} vertices, under target of {target_vertices} - no decimation needed")
+                return mesh_path
+
+            # Calculate target face count based on vertex reduction ratio
+            reduction_ratio = target_vertices / original_vertices
+            original_faces = len(mesh.faces)
+            target_faces = int(original_faces * reduction_ratio)
+
+            logger.info(f"Auto-decimating mesh: {original_vertices:,} -> ~{target_vertices:,} vertices")
+            logger.info(f"Face reduction: {original_faces:,} -> ~{target_faces:,} faces")
+
+            if progress_callback:
+                progress_callback(0.05, f"Decimating mesh ({original_vertices:,} -> {target_vertices:,} vertices)...")
+
+            # Use quadric decimation (preserves shape better)
+            decimated_mesh = mesh.simplify_quadric_decimation(target_faces)
+
+            # Verify the result
+            final_vertices = len(decimated_mesh.vertices)
+            final_faces = len(decimated_mesh.faces)
+            logger.info(f"Decimation complete: {final_vertices:,} vertices, {final_faces:,} faces")
+
+            # Save decimated mesh
+            decimated_path = output_dir / f"decimated_{mesh_path.name}"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            decimated_mesh.export(str(decimated_path))
+            logger.info(f"Saved decimated mesh to {decimated_path}")
+
+            if progress_callback:
+                progress_callback(0.10, f"Mesh decimated to {final_vertices:,} vertices")
+
+            return decimated_path
+
+        except ImportError:
+            logger.warning("trimesh not available - skipping decimation")
+            return mesh_path
+        except Exception as e:
+            logger.warning(f"Auto-decimation failed: {e} - using original mesh")
+            return mesh_path
 
     async def detect_character_type(
         self,

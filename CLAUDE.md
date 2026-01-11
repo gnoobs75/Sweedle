@@ -94,6 +94,18 @@ The backend includes optimizations for modern NVIDIA GPUs (RTX 30/40 series). Th
 - `torch.inference_mode()` for all generation
 - Flash Attention support
 
+### Godot-Optimized Quality Presets
+
+Assets are automatically decimated to game-ready vertex counts:
+
+| Preset | Faces | Vertices | Time | Use Case |
+|--------|-------|----------|------|----------|
+| **Draft** | ~5k | ~2.5k | ~30s | Quick shape preview, no texture |
+| **Godot Ready** | ~10k | ~5k | ~60s | Game characters, props (recommended) |
+| **Detailed** | ~30k | ~15k | ~90s | Hero assets, close-up models |
+
+Default preset is "Godot Ready" - optimized for Godot/Unity/Unreal game engines.
+
 ---
 
 ## Project Structure
@@ -109,7 +121,9 @@ C:\Claude\Sweedle\
 │   │   ├── inference\         # Hunyuan3D pipeline
 │   │   ├── generation\        # Generation API
 │   │   ├── assets\            # Asset library API
-│   │   ├── export\            # LOD, engine export
+│   │   ├── export\            # LOD, engine export, thumbnails
+│   │   ├── pipeline\          # VRAM/pipeline management API
+│   │   ├── workflow\          # Wizard workflow API
 │   │   ├── rigging\           # Auto-rigging system
 │   │   │   ├── router.py      # Rigging API endpoints
 │   │   │   ├── service.py     # RiggingService logic
@@ -119,6 +133,7 @@ C:\Claude\Sweedle\
 │   │   └── websocket\         # Real-time updates
 │   ├── storage\               # File storage
 │   ├── data\                  # SQLite database
+│   ├── sweedle.log            # Backend log file
 │   ├── venv\                  # Python virtual environment
 │   └── requirements.txt
 │
@@ -126,11 +141,12 @@ C:\Claude\Sweedle\
 │   ├── src\
 │   │   ├── App.tsx           # Main application
 │   │   ├── components\       # UI components
+│   │   │   ├── workflow\     # 4-stage wizard UI
 │   │   │   ├── rigging\      # RiggingPanel, CharacterTypeSelector
 │   │   │   └── viewer\       # GLBViewer, SkeletonVisualization
-│   │   ├── stores\           # Zustand state (incl. riggingStore)
-│   │   ├── hooks\            # Custom hooks
-│   │   └── services\         # API clients (incl. rigging.ts)
+│   │   ├── stores\           # Zustand state (workflowStore, riggingStore)
+│   │   ├── hooks\            # Custom hooks (useWebSocket)
+│   │   └── services\         # API clients (workflow, pipeline, rigging)
 │   ├── node_modules\
 │   └── package.json
 │
@@ -267,6 +283,33 @@ npm install package-name
 
 ## Debugging
 
+### Log File Locations
+
+| Log | Path | Description |
+|-----|------|-------------|
+| Backend | `C:\Claude\Sweedle\backend\sweedle.log` | All Python/FastAPI logs |
+| Frontend | Browser DevTools (F12) > Console | React/TypeScript logs |
+| Tauri | Tauri DevTools or terminal output | Desktop app logs |
+
+### Claude Log Monitoring
+
+Claude can read logs directly during testing. Use these commands:
+
+```
+# Read latest backend logs
+Read file: C:\Claude\Sweedle\backend\sweedle.log
+
+# Search for specific errors
+Grep pattern: "ERROR|WARNING|failed|exception" in backend/sweedle.log
+```
+
+**Key log patterns to watch:**
+- `Decimation failed:` - Mesh reduction issues
+- `Thumbnail failed:` - Thumbnail generation issues
+- `VRAM:` - GPU memory status
+- `asset_ready` - Generation completed
+- `rigging_complete` - Rigging finished
+
 ### Check Backend Logs
 Run `start-backend-debug.bat` and watch console output.
 
@@ -306,23 +349,27 @@ If `pipeline is None: True`, there's a loading issue.
 **Note**: The texture pipeline loads successfully despite custom_rasterizer warnings.
 
 ### Thumbnail Generation
-**Issue**: Requires `pyglet` which has display dependencies.
-**Workaround**: Thumbnails may fail silently. Not critical.
+**Status**: Working with matplotlib headless renderer.
+**Note**: Uses `matplotlib` with Agg backend for headless 3D thumbnail rendering.
 
 ---
 
 ## Future Roadmap
 
-### Phase 1: Core Improvements
-- [ ] Texture generation (compile custom_rasterizer)
-- [ ] Better thumbnail generation
+### Phase 1: Core Improvements (COMPLETED)
+- [x] Texture generation (Hunyuan3D-Paint integration)
+- [x] Thumbnail generation (matplotlib headless renderer)
+- [x] Mesh decimation (fast_simplification integration)
+- [x] VRAM management between stages
 - [ ] Batch processing improvements
 
-### Phase 2: Mesh Enhancement
-- [ ] Mesh smoothing/subdivision
-- [ ] Vertex optimization
-- [ ] UV unwrapping improvements
-- [ ] PBR material generation
+### Phase 2: Wizard Workflow (COMPLETED)
+- [x] 4-stage wizard UI (Mesh → Texture → Rigging → Export)
+- [x] Stage-based VRAM management
+- [x] Backend readiness endpoint
+- [x] Loading screen until backend ready
+- [x] Godot-optimized quality presets (~5k vertices)
+- [x] Auto-decimation for game-ready assets
 
 ### Phase 3: Auto-Rigging (COMPLETED)
 - [x] Skeleton detection for humanoids and quadrupeds
@@ -331,6 +378,7 @@ If `pipeline is None: True`, there's a loading issue.
 - [x] Hybrid processors (UniRig ML + Blender headless)
 - [x] Skeleton visualization in 3D viewer
 - [x] Multi-format export (GLB + FBX)
+- [x] Auto-decimation before rigging (30k vertex target)
 
 ### Phase 4: Animation
 - [ ] Basic idle animations

@@ -42,34 +42,42 @@ interface GenerationState {
   applyPreset: (preset: 'fast' | 'standard' | 'quality') => void;
 }
 
+// Default parameters optimized for Godot game assets
 const defaultParameters: GenerationParameters = {
-  inferenceSteps: 30,
-  guidanceScale: 5.5,
-  octreeResolution: 256,
+  inferenceSteps: 25,
+  guidanceScale: 5.0,
+  octreeResolution: 192,
+  faceCount: 10000,  // ~5k vertices - Godot-ready
   generateTexture: true,
   outputFormat: 'glb',
   mode: 'standard',
 };
 
 const presets: Record<string, Partial<GenerationParameters>> = {
+  // Quick preview - for rapid iteration
   fast: {
     inferenceSteps: 15,
     guidanceScale: 4.0,
     octreeResolution: 128,
-    generateTexture: true,
+    faceCount: 5000,   // ~2.5k vertices - super fast preview
+    generateTexture: false,
     mode: 'fast' as GenerationMode,
   },
+  // Godot/Game-ready - optimized for real-time engines
   standard: {
-    inferenceSteps: 30,
-    guidanceScale: 5.5,
-    octreeResolution: 256,
+    inferenceSteps: 25,
+    guidanceScale: 5.0,
+    octreeResolution: 192,
+    faceCount: 10000,  // ~5k vertices - perfect for Godot characters
     generateTexture: true,
     mode: 'standard' as GenerationMode,
   },
+  // Higher detail - for hero/close-up assets
   quality: {
-    inferenceSteps: 50,
-    guidanceScale: 7.0,
-    octreeResolution: 384,  // 384 instead of 512 for VRAM safety
+    inferenceSteps: 40,
+    guidanceScale: 6.0,
+    octreeResolution: 256,
+    faceCount: 30000,  // ~15k vertices - detailed but still game-ready
     generateTexture: true,
     mode: 'quality' as GenerationMode,
   },

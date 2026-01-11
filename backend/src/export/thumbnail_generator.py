@@ -288,37 +288,150 @@ class ThumbnailGenerator:
         mesh_path: Path,
         settings: ThumbnailSettings,
     ) -> Optional[Image.Image]:
-        """Simple placeholder thumbnail when rendering fails"""
+        """Render using matplotlib (works headlessly on Windows)"""
         def do_render():
-            # Create a simple placeholder with mesh info
-            img = Image.new('RGBA', (settings.width, settings.height),
-                          tuple(int(c * 255) for c in settings.background_color))
-
-            # Try to get mesh info
             try:
+                import matplotlib
+                matplotlib.use('Agg')  # Headless backend
+                import matplotlib.pyplot as plt
+                from mpl_toolkits.mplot3d import Axes3D
+                from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+                import numpy as np
+
                 mesh = trimesh.load(str(mesh_path))
-                if hasattr(mesh, 'geometry'):
-                    vertex_count = sum(len(g.vertices) for g in mesh.geometry.values() if hasattr(g, 'vertices'))
-                    face_count = sum(len(g.faces) for g in mesh.geometry.values() if hasattr(g, 'faces'))
+
+                # Get vertices and faces from mesh or scene
+                if hasattr(mesh, 'geometry') and mesh.geometry:
+                    # It's a Scene - combine all geometries
+                    all_vertices = []
+                    all_faces = []
+                    offset = 0
+                    for geom in mesh.geometry.values():
+                        if hasattr(geom, 'vertices') and hasattr(geom, 'faces'):
+                            all_vertices.append(geom.vertices)
+                            all_faces.append(geom.faces + offset)
+                            offset += len(geom.vertices)
+                    if all_vertices:
+                        vertices = np.vstack(all_vertices)
+                        faces = np.vstack(all_faces)
+                    else:
+                        raise ValueError("No geometry found")
                 else:
-                    vertex_count = len(mesh.vertices) if hasattr(mesh, 'vertices') else 0
-                    face_count = len(mesh.faces) if hasattr(mesh, 'faces') else 0
+                    vertices = mesh.vertices
+                    faces = mesh.faces
 
-                # Draw text info (if we have PIL ImageDraw)
-                try:
-                    from PIL import ImageDraw
-                    draw = ImageDraw.Draw(img)
-                    text = f"3D Model\n{vertex_count:,} verts\n{face_count:,} faces"
-                    draw.text((10, 10), text, fill=(255, 255, 255, 200))
-                except:
-                    pass
-            except:
-                pass
+                # Create figure
+                fig = plt.figure(figsize=(settings.width/100, settings.height/100), dpi=100)
+                ax = fig.add_subplot(111, projection='3d')
 
-            return img
+                # Set background color
+                bg = settings.background_color[:3]
+                ax.set_facecolor(bg)
+                fig.patch.set_facecolor(bg)
+
+                # Subsample faces for performance (max 5000 faces for thumbnail)
+                max_faces = 5000
+                if len(faces) > max_faces:
+                    indices = np.random.choice(len(faces), max_faces, replace=False)
+                    faces_sample = faces[indices]
+                else:
+                    faces_sample = faces
+
+                # Create polygon collection
+                poly3d = [[vertices[idx] for idx in face] for face in faces_sample]
+                collection = Poly3DCollection(poly3d, alpha=0.9, linewidth=0.1, edgecolor='#333333')
+                collection.set_facecolor('#6366f1')  # Indigo color
+                ax.add_collection3d(collection)
+
+                # Auto-scale
+                max_range = np.array([
+                    vertices[:, 0].max() - vertices[:, 0].min(),
+                    vertices[:, 1].max() - vertices[:, 1].min(),
+                    vertices[:, 2].max() - vertices[:, 2].min()
+                ]).max() / 2.0
+
+                mid_x = (vertices[:, 0].max() + vertices[:, 0].min()) * 0.5
+                mid_y = (vertices[:, 1].max() + vertices[:, 1].min()) * 0.5
+                mid_z = (vertices[:, 2].max() + vertices[:, 2].min()) * 0.5
+
+                ax.set_xlim(mid_x - max_range, mid_x + max_range)
+                ax.set_ylim(mid_y - max_range, mid_y + max_range)
+                ax.set_zlim(mid_z - max_range, mid_z + max_range)
+
+                # Set camera angle
+                ax.view_init(elev=settings.camera_angle[0], azim=settings.camera_angle[1])
+
+                # Hide axes
+                ax.set_axis_off()
+
+                # Remove padding
+                plt.tight_layout(pad=0)
+
+                # Render to image
+                buf = io.BytesIO()
+                fig.savefig(buf, format='png', facecolor=fig.get_facecolor(),
+                           edgecolor='none', bbox_inches='tight', pad_inches=0)
+                plt.close(fig)
+                buf.seek(0)
+
+                img = Image.open(buf).convert('RGBA')
+                # Resize to exact dimensions
+                img = img.resize((settings.width, settings.height), Image.Resampling.LANCZOS)
+                return img
+
+            except Exception as e:
+                logger.warning(f"Matplotlib rendering failed: {e}, using placeholder")
+                return self._create_placeholder(mesh_path, settings)
 
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, do_render)
+
+    def _create_placeholder(
+        self,
+        mesh_path: Path,
+        settings: ThumbnailSettings,
+    ) -> Image.Image:
+        """Create a simple placeholder thumbnail with mesh info"""
+        img = Image.new('RGBA', (settings.width, settings.height),
+                      tuple(int(c * 255) for c in settings.background_color))
+
+        try:
+            mesh = trimesh.load(str(mesh_path))
+            if hasattr(mesh, 'geometry'):
+                vertex_count = sum(len(g.vertices) for g in mesh.geometry.values() if hasattr(g, 'vertices'))
+                face_count = sum(len(g.faces) for g in mesh.geometry.values() if hasattr(g, 'faces'))
+            else:
+                vertex_count = len(mesh.vertices) if hasattr(mesh, 'vertices') else 0
+                face_count = len(mesh.faces) if hasattr(mesh, 'faces') else 0
+
+            from PIL import ImageDraw
+            draw = ImageDraw.Draw(img)
+
+            # Draw a simple 3D box icon
+            cx, cy = settings.width // 2, settings.height // 2
+            size = min(settings.width, settings.height) // 4
+
+            # Box vertices (isometric projection)
+            points = [
+                (cx, cy - size),  # top
+                (cx + size, cy - size//2),  # right top
+                (cx + size, cy + size//2),  # right bottom
+                (cx, cy + size),  # bottom
+                (cx - size, cy + size//2),  # left bottom
+                (cx - size, cy - size//2),  # left top
+            ]
+
+            # Draw box faces
+            draw.polygon(points, fill=(99, 102, 241, 200), outline=(255, 255, 255, 150))
+
+            # Draw text
+            text = f"{vertex_count:,} verts\n{face_count:,} faces"
+            draw.text((10, settings.height - 50), text, fill=(255, 255, 255, 200))
+
+        except Exception as e:
+            logger.warning(f"Placeholder creation failed: {e}")
+
+        return img
 
 
 async def generate_batch_thumbnails(

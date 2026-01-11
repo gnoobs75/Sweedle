@@ -2,37 +2,47 @@
  * Sweedle - Main Application
  */
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { AppShell } from './components/layout';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useUIStore } from './stores/uiStore';
-import { GenerationPanel } from './components/generation/GenerationPanel';
+import { WorkflowWizard } from './components/workflow';
 import { ViewerPanel } from './components/viewer/ViewerPanel';
 import { LibraryPanel } from './components/library/LibraryPanel';
 import { ExportPanel } from './components/export/ExportPanel';
 import { RiggingPanel } from './components/rigging/RiggingPanel';
 import { ToastContainer, DebugPanel, GPUMonitor } from './components/ui';
+import { LoadingScreen } from './components/LoadingScreen';
 import { logger } from './lib/logger';
 
 function App() {
-  // Initialize WebSocket connection
+  const [backendReady, setBackendReady] = useState(false);
+
+  // Initialize WebSocket connection (only after backend is ready)
   useWebSocket();
 
   const { activePanels, activeModal, modalData, closeModal } = useUIStore();
 
-  // Log app initialization (once)
+  // Log app initialization (once backend is ready)
   useEffect(() => {
-    logger.info('App', 'Sweedle initialized', {
-      timestamp: new Date().toISOString(),
-      activePanels
-    });
-  }, []);
+    if (backendReady) {
+      logger.info('App', 'Sweedle initialized', {
+        timestamp: new Date().toISOString(),
+        activePanels
+      });
+    }
+  }, [backendReady]);
+
+  // Show loading screen until backend is ready
+  if (!backendReady) {
+    return <LoadingScreen onReady={() => setBackendReady(true)} />;
+  }
 
   return (
     <>
       <AppShell
         leftPanel={
-          activePanels.includes('generation') ? <GenerationPanel /> : null
+          activePanels.includes('generation') ? <WorkflowWizard /> : null
         }
         centerPanel={<ViewerPanel />}
         rightPanel={

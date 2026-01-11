@@ -31,6 +31,17 @@ class AssetStatus(enum.Enum):
     FAILED = "failed"
 
 
+class WorkflowStage(str, enum.Enum):
+    """Workflow stage for asset processing pipeline."""
+    UPLOADED = "uploaded"           # Image uploaded, not yet generated
+    MESH_GENERATED = "mesh_generated"   # Mesh generated, awaiting approval
+    MESH_APPROVED = "mesh_approved"     # Mesh approved, ready for texture
+    TEXTURED = "textured"               # Texture applied, awaiting approval
+    TEXTURE_APPROVED = "texture_approved"  # Texture approved, ready for rigging
+    RIGGED = "rigged"                   # Rigged, ready for export
+    EXPORTED = "exported"               # Final export complete
+
+
 class GenerationType(enum.Enum):
     """Type of generation."""
     IMAGE_TO_3D = "image_to_3d"
@@ -127,6 +138,11 @@ class Asset(Base):
     character_type = Column(String(50), nullable=True)  # humanoid, quadruped
     rigged_mesh_path = Column(String(500), nullable=True)
     rigging_processor = Column(String(50), nullable=True)  # unirig, blender
+
+    # Workflow tracking
+    workflow_stage = Column(String(50), default=WorkflowStage.UPLOADED.value)
+    mesh_path = Column(String(500), nullable=True)      # Untextured mesh path
+    textured_path = Column(String(500), nullable=True)  # Textured mesh path
 
     # Relationships
     tags = relationship("Tag", secondary=asset_tags, back_populates="assets")
