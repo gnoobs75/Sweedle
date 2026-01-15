@@ -55,7 +55,7 @@ const defaultSettings: ViewerSettings = {
   showGrid: true,
   showAxes: false,
   autoRotate: false,
-  backgroundColor: '#2a2a3e', // Dusk theme - darker base
+  backgroundColor: '#1a1a2e',
   environmentMap: 'studio',
   exposure: 1.0,
 };
