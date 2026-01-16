@@ -106,6 +106,23 @@ Assets are automatically decimated to game-ready vertex counts:
 
 Default preset is "Godot Ready" - optimized for Godot/Unity/Unreal game engines.
 
+### Animation Presets
+
+Pre-built procedural animations available for rigged models:
+
+| Preset | Type | Description | Default Duration |
+|--------|------|-------------|------------------|
+| **Idle** | Humanoid | Breathing, weight shift, micro-movements | 2.0s |
+| **Walk** | Humanoid | Hip bounce/sway, leg IK, arm swing | 1.0s |
+| **Run** | Humanoid | Faster locomotion with spine twist | 0.6s |
+| **Attack** | Humanoid | Overhead swing attack | 1.2s |
+| **Quadruped Idle** | Quadruped | Breathing, tail sway | 2.0s |
+| **Trot** | Quadruped | Four-legged walking gait | 0.8s |
+| **Tail Wag** | Quadruped | Happy tail wagging | 0.5s |
+| **Bite** | Quadruped | Attack animation | 0.8s |
+
+All animations support **speed** (0.5-2.0x) and **intensity** (0.5-1.5x) parameters.
+
 ---
 
 ## Project Structure
@@ -130,6 +147,12 @@ C:\Claude\Sweedle\
 │   │   │   ├── schemas.py     # Pydantic models
 │   │   │   ├── processors\    # UniRig, Blender processors
 │   │   │   └── skeleton\      # Skeleton templates
+│   │   ├── animation\         # Animation system
+│   │   │   ├── router.py      # Animation API endpoints
+│   │   │   ├── service.py     # AnimationService logic
+│   │   │   ├── schemas.py     # Pydantic models
+│   │   │   ├── generators\    # Procedural animation generators
+│   │   │   └── exporters\     # GLB animation embedding
 │   │   └── websocket\         # Real-time updates
 │   ├── storage\               # File storage
 │   ├── data\                  # SQLite database
@@ -141,20 +164,25 @@ C:\Claude\Sweedle\
 │   ├── src\
 │   │   ├── App.tsx           # Main application
 │   │   ├── components\       # UI components
-│   │   │   ├── workflow\     # 4-stage wizard UI
+│   │   │   ├── workflow\     # 5-stage wizard UI
 │   │   │   ├── rigging\      # RiggingPanel, CharacterTypeSelector
+│   │   │   ├── animation\    # AnimationStudio, PresetSelector, Timeline
 │   │   │   └── viewer\       # GLBViewer, SkeletonVisualization
-│   │   ├── stores\           # Zustand state (workflowStore, riggingStore)
-│   │   ├── hooks\            # Custom hooks (useWebSocket)
-│   │   └── services\         # API clients (workflow, pipeline, rigging)
+│   │   ├── stores\           # Zustand state (workflowStore, riggingStore, animationStore)
+│   │   ├── hooks\            # Custom hooks (useWebSocket, useAnimationMixer)
+│   │   └── services\         # API clients (workflow, pipeline, rigging, animation)
 │   ├── node_modules\
 │   └── package.json
 │
 ├── .claude\
-│   └── skills\               # Claude Code skills
-│       ├── rig-asset.md
-│       ├── debug-rigging.md
-│       └── export-rigged.md
+│   └── skills\               # Claude Code skills (16 total)
+│       ├── gpu-status.md, clear-vram.md, gpu-benchmark.md
+│       ├── model-status.md, clear-cache.md
+│       ├── watch-logs.md, debug-generation.md
+│       ├── generate-quick.md, generate-production.md
+│       ├── batch-generate.md, batch-export.md
+│       ├── rig-asset.md, debug-rigging.md, export-rigged.md
+│       └── cleanup-assets.md, db-maintenance.md
 │
 ├── start.bat                 # Start both services
 ├── start-backend-debug.bat   # Backend with logging
@@ -176,7 +204,7 @@ C:\Claude\Sweedle\
 **Key Notes:**
 - The `hy3dgen` library's `.to()` method returns `None` instead of `self` (bug in their code)
 - Model loading is done synchronously to avoid thread visibility issues
-- Texture generation is disabled (requires custom_rasterizer CUDA compilation)
+- Texture generation loads from tencent/Hunyuan3D-2 (~18GB VRAM)
 
 ### Generation Flow
 1. Image uploaded via `/api/generation/image-to-3d`
@@ -186,6 +214,13 @@ C:\Claude\Sweedle\
 5. Hunyuan3D generates 3D shape
 6. Mesh saved as GLB
 7. WebSocket broadcasts completion
+
+### 5-Stage Workflow
+1. **Mesh** - Generate 3D shape from image (Hunyuan3D-2.1)
+2. **Texture** - Apply AI-generated textures (Hunyuan3D-Paint)
+3. **Rigging** - Auto-rig with skeleton and weights
+4. **Animation** - Apply procedural animations from presets
+5. **Export** - Optimize and export to game engine format
 
 ### Configuration
 `backend/src/config.py` - Pydantic settings, environment variables
@@ -236,6 +271,46 @@ C:\Claude\Sweedle\
 | `rigging_progress` | Rigging job progress updates |
 | `rigging_complete` | Rigging completed notification |
 | `rigging_failed` | Rigging failure notification |
+
+### WebSocket Animation Messages
+| Message Type | Description |
+|--------------|-------------|
+| `animation_created` | Animation clip created |
+| `animation_deleted` | Animation clip deleted |
+| `animation_regenerated` | Animation regenerated with new params |
+
+### Animation
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/animation/presets` | List available animation presets |
+| GET | `/api/animation/presets/{id}` | Get preset details |
+| POST | `/api/animation/validate` | Validate skeleton bone compatibility |
+| POST | `/api/animation/clips` | Create animation from preset |
+| GET | `/api/animation/clips/asset/{id}` | List asset animations |
+| GET | `/api/animation/clips/{id}` | Get animation clip |
+| GET | `/api/animation/clips/{id}/data` | Get keyframe data for playback |
+| DELETE | `/api/animation/clips/{id}` | Delete animation |
+| PUT | `/api/animation/clips/{id}/regenerate` | Regenerate with new parameters |
+
+### Export & Mesh Optimization
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/export/generate-lods` | Generate LOD levels for asset |
+| POST | `/api/export/validate` | Validate asset for game engine |
+| POST | `/api/export/optimize` | Optimize mesh (ground_origin, center_pivot, etc.) |
+| POST | `/api/export/compress` | Compress asset with Draco |
+| POST | `/api/export/thumbnail` | Generate thumbnail preview |
+| POST | `/api/export/to-engine` | Export to Unity/Unreal/Godot project |
+| POST | `/api/export/with-animations` | Export GLB with embedded animations |
+
+### Mesh Optimization Options
+| Option | Default | Description |
+|--------|---------|-------------|
+| `remove_degenerates` | `true` | Remove degenerate (zero-area) faces |
+| `merge_duplicates` | `true` | Merge duplicate vertices |
+| `fix_normals` | `true` | Ensure consistent normals |
+| `center_pivot` | `false` | Center mesh on XZ plane |
+| `ground_origin` | `false` | **Move mesh so bottom is at Y=0** (fixes models appearing half-sunk in ground) |
 
 ---
 
@@ -352,6 +427,12 @@ If `pipeline is None: True`, there's a loading issue.
 **Status**: Working with matplotlib headless renderer.
 **Note**: Uses `matplotlib` with Agg backend for headless 3D thumbnail rendering.
 
+### Animation Bone Names
+**Issue**: Animation generators assume specific bone names from the rigging system.
+**Required bones for humanoid**: Hips, Spine, Chest, Neck, Head, LeftShoulder, LeftArm, LeftForeArm, RightShoulder, RightArm, RightForeArm, LeftUpLeg, LeftLeg, RightUpLeg, RightLeg
+**Required bones for quadruped**: Root, Spine, Neck, Head, Tail, FrontLeftLeg, FrontRightLeg, BackLeftLeg, BackRightLeg
+**Note**: If rigged model uses different bone names, animations may not apply correctly.
+
 ---
 
 ## Future Roadmap
@@ -364,7 +445,7 @@ If `pipeline is None: True`, there's a loading issue.
 - [ ] Batch processing improvements
 
 ### Phase 2: Wizard Workflow (COMPLETED)
-- [x] 4-stage wizard UI (Mesh → Texture → Rigging → Export)
+- [x] 5-stage wizard UI (Mesh → Texture → Rigging → Animation → Export)
 - [x] Stage-based VRAM management
 - [x] Backend readiness endpoint
 - [x] Loading screen until backend ready
@@ -380,9 +461,20 @@ If `pipeline is None: True`, there's a loading issue.
 - [x] Multi-format export (GLB + FBX)
 - [x] Auto-decimation before rigging (30k vertex target)
 
-### Phase 4: Animation
-- [ ] Basic idle animations
-- [ ] Walk/run cycles
+### Phase 4: Animation (IN PROGRESS ~90%)
+- [x] Animation Studio UI with preset library
+- [x] Procedural animation generators (idle, walk, run, attack)
+- [x] Quadruped animations (trot, tail wag, bite)
+- [x] Animation timeline with play/pause/scrub controls
+- [x] Parameter customization (speed, intensity)
+- [x] AnimationClip database model
+- [x] useAnimationMixer hook for Three.js
+- [x] GLTFAnimationExporter class
+- [x] Viewer integration - AnimationMixer in GLBViewer
+- [x] Export endpoint - `/api/export/with-animations`
+- [x] Bone name validation and warnings
+- [x] Bone name aliasing (Mixamo, Blender compatibility)
+- [ ] Animation preview thumbnails (video/GIF)
 - [ ] Animation retargeting
 - [ ] Mixamo integration
 
@@ -610,6 +702,31 @@ Add support for a new export format (FBX, OBJ, etc.)
 4. Add UI control in frontend `ParameterControls.tsx`
 5. Update store in `generationStore.ts`
 
+### Adding a New Animation Generator
+
+1. Create generator class in `backend/src/animation/generators/`
+2. Inherit from `BaseAnimationGenerator` in `base.py`
+3. Implement `generate(skeleton_data, parameters)` method
+4. Add animation type to `AnimationType` enum in `schemas.py`
+5. Add preset definition in `service.py` `ANIMATION_PRESETS` dict
+6. Register generator in `AnimationService._get_generator()`
+
+**Generator must return:**
+```python
+{
+    "tracks": [
+        {
+            "bone_name": "Hips",
+            "property": "rotation",  # or "position"
+            "times": [0.0, 0.5, 1.0],
+            "values": [quaternion_values...]  # flat array
+        }
+    ],
+    "duration": 2.0,
+    "frame_rate": 30
+}
+```
+
 ---
 
 ## Testing
@@ -637,6 +754,18 @@ Add support for a new export format (FBX, OBJ, etc.)
 - [ ] Can click bones to select them
 - [ ] Export as FBX works (requires Blender)
 
+### Animation Testing Checklist
+
+- [ ] AnimationStage appears after rigging stage
+- [ ] Animation presets load for character type (humanoid/quadruped)
+- [ ] Can select preset and adjust parameters
+- [ ] Animation creates successfully via API
+- [ ] Animation appears in AnimationList
+- [ ] Timeline shows with play/pause controls
+- [ ] Animation plays in 3D viewer (pending integration)
+- [ ] Can delete animations
+- [ ] Export includes embedded animations (pending endpoint)
+
 ### Verify Generation Works
 
 1. Start backend and frontend
@@ -645,6 +774,81 @@ Add support for a new export format (FBX, OBJ, etc.)
 4. Watch progress bar
 5. Confirm 3D model loads in viewer
 6. Check logs for "Shape complete"
+
+---
+
+## Tutorial Mode Maintenance
+
+**IMPORTANT**: Keep tutorials up-to-date when adding or modifying UI features!
+
+Tutorial Mode provides comprehensive how-to guides for each workflow stage. The content is stored in:
+```
+frontend/src/content/tutorials.ts
+```
+
+### Tutorial Structure
+
+Each stage has a tutorial with:
+- **Introduction**: Brief overview of the stage
+- **Sections**: Detailed guides with steps and terminology
+- **Quick Start**: Numbered checklist for getting started fast
+- **Common Issues**: Troubleshooting Q&A
+
+### When to Update Tutorials
+
+Update `tutorials.ts` when you:
+1. Add a new UI control or feature to any stage
+2. Change workflow steps or user interactions
+3. Add new terminology (AI models, file formats, etc.)
+4. Modify quality presets or generation settings
+5. Add new export options or formats
+6. Change the animation or rigging process
+
+### How to Update
+
+1. Open `frontend/src/content/tutorials.ts`
+2. Find the relevant stage tutorial (e.g., `uploadStageTutorial`)
+3. Add/update the appropriate section:
+   - **New feature**: Add to relevant section's `steps` array
+   - **New term**: Add to section's `terminology` array
+   - **New tip**: Add to section's `tips` array
+   - **New issue**: Add to `commonIssues` array
+
+### Tutorial Content Guidelines
+
+- Use clear, simple language (avoid jargon when possible)
+- Include examples for terminology where helpful
+- Keep steps action-oriented ("Click X", "Enter Y")
+- Add tips for non-obvious functionality
+- Document common errors and their solutions
+
+### Testing Tutorial Changes
+
+1. Enable Tutorial Mode (toggle in workflow header)
+2. Navigate to the updated stage
+3. Verify content displays correctly
+4. Test all expandable sections
+5. Check that terminology is accurate
+
+### Tutorial Files Reference
+
+| File | Purpose |
+|------|---------|
+| `frontend/src/content/tutorials.ts` | All tutorial content |
+| `frontend/src/components/tutorial/TutorialPanel.tsx` | Display component |
+| `frontend/src/components/tutorial/TutorialToggle.tsx` | Enable/disable toggle |
+| `frontend/src/stores/settingsStore.ts` | Tutorial mode state |
+
+### Tutorial Testing Checklist
+
+- [ ] Tutorial toggle button works in header
+- [ ] Tutorial panel shows for each stage
+- [ ] All sections expand/collapse correctly
+- [ ] Glossary tab shows terms alphabetically
+- [ ] Tips & Issues tab shows relevant content
+- [ ] Quick Start steps are numbered correctly
+- [ ] Dismiss button hides tutorial for that stage
+- [ ] Settings persist across page refreshes
 
 ---
 

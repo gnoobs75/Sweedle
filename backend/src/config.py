@@ -94,6 +94,15 @@ class Settings(BaseSettings):
     ENABLE_TEXTURE_PIPELINE: bool = True  # Load texture generation (18GB extra VRAM)
     LAZY_MODEL_LOADING: bool = False  # If True, load models on first job instead of startup
 
+    # === Text-to-Image (SDXL) Settings ===
+    ENABLE_TEXT_TO_IMAGE: bool = True  # Enable text-to-image feature
+    SDXL_MODEL_PATH: str = "stabilityai/stable-diffusion-xl-base-1.0"
+    SDXL_DEFAULT_STEPS: int = 30
+    SDXL_DEFAULT_GUIDANCE: float = 7.5
+    SDXL_DEFAULT_WIDTH: int = 1024
+    SDXL_DEFAULT_HEIGHT: int = 1024
+    SDXL_USE_REFINER: bool = False  # Use SDXL refiner for higher quality (extra VRAM)
+
     @property
     def compute_device(self) -> str:
         """Get the actual compute device to use.

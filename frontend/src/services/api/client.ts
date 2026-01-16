@@ -177,6 +177,22 @@ function patch<T>(
   });
 }
 
+function put<T>(
+  endpoint: string,
+  data: unknown,
+  options?: RequestOptions
+): Promise<T> {
+  return request<T>(endpoint, {
+    ...options,
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...options?.headers,
+    },
+    body: JSON.stringify(data),
+  });
+}
+
 function del<T>(endpoint: string, options?: RequestOptions): Promise<T> {
   return request<T>(endpoint, { ...options, method: 'DELETE' });
 }
@@ -185,6 +201,7 @@ export const apiClient = {
   get,
   post,
   patch,
+  put,
   delete: del,
   request,
 };

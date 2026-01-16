@@ -15,7 +15,8 @@ const steps: StepConfig[] = [
   { id: 'mesh', label: 'Mesh', number: 2 },
   { id: 'texture', label: 'Texture', number: 3 },
   { id: 'rigging', label: 'Rig', number: 4 },
-  { id: 'export', label: 'Export', number: 5 },
+  { id: 'animation', label: 'Animate', number: 5 },
+  { id: 'export', label: 'Export', number: 6 },
 ];
 
 function getStepStyles(status: StageStatus, isCurrent: boolean): string {

@@ -19,9 +19,14 @@ from src.generation.schemas import (
     JobStatusResponse,
     OutputFormat,
     QueueStatusResponse,
+    TextToImageResponse,
+    StylePresetResponse,
 )
 from src.generation.service import GenerationService
 from src.generation.image_analyzer import analyze_image
+from src.inference.text_to_image import SDXLPipeline, TextToImageConfig, get_sdxl_pipeline
+from src.inference.style_presets import get_all_presets, get_preset
+from src.config import settings
 from PIL import Image
 import io
 
@@ -150,32 +155,115 @@ async def generate_from_image(
     )
 
 
-@router.post("/text-to-3d", response_model=GenerationResponse)
-async def generate_from_text(
-    prompt: str = Form(..., min_length=3, max_length=500),
-    name: Optional[str] = Form(None),
-    inference_steps: int = Form(30, ge=5, le=100),
-    guidance_scale: float = Form(5.5, ge=1.0, le=15.0),
-    octree_resolution: int = Form(256),
-    seed: Optional[int] = Form(None),
-    generate_texture: bool = Form(True),
-    face_count: Optional[int] = Form(None),
-    output_format: str = Form("glb"),
-    mode: str = Form("standard"),
-    priority: str = Form("normal"),
-    project_id: Optional[str] = Form(None),
-    tags: Optional[str] = Form(None),
+@router.get("/text-to-image/presets", response_model=list[StylePresetResponse])
+async def get_style_presets():
+    """Get available style presets for text-to-image generation."""
+    if not settings.ENABLE_TEXT_TO_IMAGE:
+        raise HTTPException(503, "Text-to-image feature is disabled")
+
+    return get_all_presets()
+
+
+@router.post("/text-to-image", response_model=TextToImageResponse)
+async def generate_image_from_text(
+    request: Request,
+    prompt: str = Form(..., min_length=3, max_length=500, description="Text description"),
+    style_preset: str = Form("game_asset", description="Style preset ID"),
+    negative_prompt: Optional[str] = Form(None, description="Things to avoid"),
+    seed: Optional[int] = Form(None, description="Random seed"),
+    num_inference_steps: int = Form(30, ge=10, le=50, description="Diffusion steps"),
+    guidance_scale: float = Form(7.5, ge=1.0, le=20.0, description="Guidance scale"),
     service: GenerationService = Depends(get_service),
 ):
-    """Submit a text prompt for 3D generation.
+    """Generate an image from a text prompt using Stable Diffusion XL.
 
-    Note: Text-to-3D requires a text-to-image step first.
-    This endpoint is a placeholder for future implementation.
+    The generated image can then be used with the image-to-3D endpoint.
+
+    This endpoint:
+    1. Loads SDXL if not already loaded (~7GB VRAM)
+    2. Generates image from prompt with style preset
+    3. Saves image and returns URL
+    4. Unloads SDXL from GPU to free VRAM for Hunyuan3D
+
+    Style presets optimize prompts for 3D-friendly images:
+    - game_asset: General 3D asset with clean background
+    - character: Full-body character for rigging
+    - prop: Game prop/inventory item
+    - creature: Fantasy creature
+    - vehicle: Vehicle/transportation
+    - weapon: Weapon/tool
     """
-    raise HTTPException(
-        501,
-        "Text-to-3D is not yet implemented. Please use image-to-3D with a generated image."
+    if not settings.ENABLE_TEXT_TO_IMAGE:
+        raise HTTPException(503, "Text-to-image feature is disabled")
+
+    # Generate unique ID for this image
+    image_id = str(uuid.uuid4())
+
+    # Create output path
+    output_dir = settings.UPLOAD_DIR / "generated"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{image_id}.png"
+
+    # Get WebSocket manager for progress updates
+    ws_manager = get_websocket_manager()
+
+    # Create config
+    config = TextToImageConfig(
+        prompt=prompt,
+        style_preset=style_preset,
+        negative_prompt=negative_prompt,
+        seed=seed,
+        num_inference_steps=num_inference_steps,
+        guidance_scale=guidance_scale,
+        width=settings.SDXL_DEFAULT_WIDTH,
+        height=settings.SDXL_DEFAULT_HEIGHT,
     )
+
+    # Progress callback
+    async def progress_callback(progress: float, stage: str):
+        await ws_manager.broadcast({
+            "type": "text_to_image_progress",
+            "image_id": image_id,
+            "progress": progress,
+            "stage": stage,
+        })
+
+    # Synchronous wrapper for async callback
+    import asyncio
+    loop = asyncio.get_running_loop()
+
+    def sync_progress(progress: float, stage: str):
+        asyncio.run_coroutine_threadsafe(progress_callback(progress, stage), loop)
+
+    try:
+        # Get pipeline and generate
+        pipeline = get_sdxl_pipeline()
+        result = await pipeline.generate_and_unload(
+            config=config,
+            output_path=output_path,
+            progress_callback=sync_progress,
+        )
+
+        if not result.success:
+            raise HTTPException(500, f"Image generation failed: {result.error}")
+
+        # Build image URL (served via /storage mount)
+        image_url = f"/storage/uploads/generated/{image_id}.png"
+
+        return TextToImageResponse(
+            success=True,
+            image_id=image_id,
+            image_url=image_url,
+            seed_used=result.seed_used,
+            prompt_used=result.prompt_used,
+            generation_time=result.generation_time,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Text-to-image generation failed: {e}")
+        raise HTTPException(500, f"Image generation failed: {str(e)}")
 
 
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)

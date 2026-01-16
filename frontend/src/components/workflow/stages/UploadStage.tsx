@@ -1,13 +1,17 @@
 /**
- * UploadStage - Stage 1: Image upload
+ * UploadStage - Stage 1: Image upload or text-to-image generation
  */
 
 import { useCallback, useState } from 'react';
 import { useWorkflowStore } from '../../../stores/workflowStore';
 import { useGenerationStore } from '../../../stores/generationStore';
 import { generateFromImage } from '../../../services/api/generation';
+import { TextPromptInput } from '../TextPromptInput';
+
+type InputMode = 'upload' | 'generate';
 
 export function UploadStage() {
+  const [inputMode, setInputMode] = useState<InputMode>('upload');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -24,6 +28,14 @@ export function UploadStage() {
   } = useWorkflowStore();
 
   const { parameters } = useGenerationStore();
+
+  // Handle when text-to-image generates an image
+  const handleImageGenerated = useCallback((file: File, previewUrl: string) => {
+    // Create object URL for preview (or use the provided one)
+    setSourceImage(file);
+    // Switch to showing the generated image in upload mode view
+    setInputMode('upload');
+  }, [setSourceImage]);
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -86,103 +98,148 @@ export function UploadStage() {
 
   return (
     <div className="space-y-4">
-      <h3 className="text-lg font-medium text-white">Upload Source Image</h3>
-      <p className="text-sm text-gray-400">
-        Upload an image of the object you want to convert to 3D.
-        For best results, use images with a clear subject and simple background.
-      </p>
+      <h3 className="text-lg font-medium text-white">Create Source Image</h3>
 
-      {/* Drop zone */}
-      <div
-        onDrop={handleDrop}
-        onDragOver={handleDragOver}
-        className="relative border-2 border-dashed border-gray-600 rounded-lg p-6 hover:border-indigo-500 transition-colors cursor-pointer"
-      >
-        <input
-          type="file"
-          accept="image/*"
-          onChange={handleFileChange}
-          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-        />
-
-        {sourceImagePreview ? (
-          <div className="flex flex-col items-center">
-            <img
-              src={sourceImagePreview}
-              alt="Preview"
-              className="max-h-48 rounded-lg object-contain"
-            />
-            <p className="mt-2 text-sm text-gray-400">{sourceImage?.name}</p>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setSourceImage(null);
-              }}
-              className="mt-2 text-xs text-red-400 hover:text-red-300"
-            >
-              Remove
-            </button>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center text-center">
-            <svg
-              className="w-12 h-12 text-gray-500 mb-3"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.5}
-                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-              />
+      {/* Input mode tabs */}
+      <div className="flex gap-1 p-1 bg-gray-800 rounded-lg">
+        <button
+          onClick={() => setInputMode('upload')}
+          className={`flex-1 py-2 px-3 text-sm font-medium rounded transition-colors ${
+            inputMode === 'upload'
+              ? 'bg-indigo-600 text-white'
+              : 'text-gray-400 hover:text-white hover:bg-gray-700'
+          }`}
+        >
+          <span className="flex items-center justify-center gap-2">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
-            <p className="text-gray-400">
-              Drag and drop an image, or click to browse
-            </p>
-            <p className="mt-1 text-xs text-gray-500">
-              PNG, JPG, WEBP up to 10MB
-            </p>
-          </div>
-        )}
+            Upload Image
+          </span>
+        </button>
+        <button
+          onClick={() => setInputMode('generate')}
+          className={`flex-1 py-2 px-3 text-sm font-medium rounded transition-colors ${
+            inputMode === 'generate'
+              ? 'bg-indigo-600 text-white'
+              : 'text-gray-400 hover:text-white hover:bg-gray-700'
+          }`}
+        >
+          <span className="flex items-center justify-center gap-2">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+            </svg>
+            Generate from Text
+          </span>
+        </button>
       </div>
 
-      {/* Asset name */}
-      {sourceImage && (
-        <div className="space-y-2">
-          <label className="block text-sm text-gray-400">Asset Name</label>
-          <input
-            type="text"
-            value={assetName}
-            onChange={(e) => setAssetName(e.target.value)}
-            placeholder="Enter asset name"
-            className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
-          />
-        </div>
+      {/* Upload mode content */}
+      {inputMode === 'upload' && (
+        <>
+          <p className="text-sm text-gray-400">
+            Upload an image of the object you want to convert to 3D.
+            For best results, use images with a clear subject and simple background.
+          </p>
+
+          {/* Drop zone */}
+          <div
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+            className="relative border-2 border-dashed border-gray-600 rounded-lg p-6 hover:border-indigo-500 transition-colors cursor-pointer"
+          >
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            />
+
+            {sourceImagePreview ? (
+              <div className="flex flex-col items-center">
+                <img
+                  src={sourceImagePreview}
+                  alt="Preview"
+                  className="max-h-48 rounded-lg object-contain"
+                />
+                <p className="mt-2 text-sm text-gray-400">{sourceImage?.name}</p>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSourceImage(null);
+                  }}
+                  className="mt-2 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center text-center">
+                <svg
+                  className="w-12 h-12 text-gray-500 mb-3"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={1.5}
+                    d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                  />
+                </svg>
+                <p className="text-gray-400">
+                  Drag and drop an image, or click to browse
+                </p>
+                <p className="mt-1 text-xs text-gray-500">
+                  PNG, JPG, WEBP up to 10MB
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Asset name */}
+          {sourceImage && (
+            <div className="space-y-2">
+              <label className="block text-sm text-gray-400">Asset Name</label>
+              <input
+                type="text"
+                value={assetName}
+                onChange={(e) => setAssetName(e.target.value)}
+                placeholder="Enter asset name"
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+          )}
+
+          {/* Quality Preset */}
+          {sourceImage && (
+            <QualityPresetSelector />
+          )}
+
+          {/* Error display */}
+          {submitError && (
+            <div className="p-3 bg-red-900/20 border border-red-700/30 rounded text-sm text-red-400">
+              {submitError}
+            </div>
+          )}
+
+          {/* Start button */}
+          {sourceImage && (
+            <button
+              onClick={handleStartGeneration}
+              disabled={isSubmitting}
+              className="w-full py-2.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800 disabled:cursor-not-allowed rounded transition-colors"
+            >
+              {isSubmitting ? 'Submitting...' : 'Generate 3D Mesh'}
+            </button>
+          )}
+        </>
       )}
 
-      {/* Quality Preset */}
-      {sourceImage && (
-        <QualityPresetSelector />
-      )}
-
-      {/* Error display */}
-      {submitError && (
-        <div className="p-3 bg-red-900/20 border border-red-700/30 rounded text-sm text-red-400">
-          {submitError}
-        </div>
-      )}
-
-      {/* Start button */}
-      {sourceImage && (
-        <button
-          onClick={handleStartGeneration}
-          disabled={isSubmitting}
-          className="w-full py-2.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800 disabled:cursor-not-allowed rounded transition-colors"
-        >
-          {isSubmitting ? 'Submitting...' : 'Generate 3D Mesh'}
-        </button>
+      {/* Generate from text mode content */}
+      {inputMode === 'generate' && (
+        <TextPromptInput onImageGenerated={handleImageGenerated} />
       )}
     </div>
   );

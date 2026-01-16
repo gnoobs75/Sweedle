@@ -2,12 +2,12 @@
  * ApprovalControls - Bottom action bar for workflow stage approval
  *
  * Handles:
- * - Stage action buttons (start generation, texturing, rigging)
+ * - Stage action buttons (start generation, texturing, rigging, animation)
  * - Progress display during processing
  * - Approval/Redo/Skip buttons after completion
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { useGenerationStore } from '../../stores/generationStore';
 import { generateFromImage, addTextureToAsset } from '../../services/api/generation';
@@ -16,6 +16,7 @@ import { autoRigAsset } from '../../services/api/rigging';
 export function ApprovalControls() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const {
     currentStage,
@@ -43,6 +44,47 @@ export function ApprovalControls() {
   const isFailed = currentStatus === 'failed';
   const isPending = currentStatus === 'pending';
   const isExportStage = currentStage === 'export';
+  const isAnimationStage = currentStage === 'animation';
+
+  // Clear error when stage changes
+  useEffect(() => {
+    setError(null);
+    if (errorTimeoutRef.current) {
+      clearTimeout(errorTimeoutRef.current);
+      errorTimeoutRef.current = null;
+    }
+  }, [currentStage]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (errorTimeoutRef.current) {
+        clearTimeout(errorTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Helper to set error with optional auto-clear
+  const setErrorWithTimeout = useCallback((message: string, autoClearMs?: number) => {
+    if (errorTimeoutRef.current) {
+      clearTimeout(errorTimeoutRef.current);
+    }
+    setError(message);
+    if (autoClearMs) {
+      errorTimeoutRef.current = setTimeout(() => {
+        setError(null);
+        errorTimeoutRef.current = null;
+      }, autoClearMs);
+    }
+  }, []);
+
+  const dismissError = useCallback(() => {
+    setError(null);
+    if (errorTimeoutRef.current) {
+      clearTimeout(errorTimeoutRef.current);
+      errorTimeoutRef.current = null;
+    }
+  }, []);
 
   // Start mesh generation
   const handleStartMesh = useCallback(async () => {
@@ -160,6 +202,14 @@ export function ApprovalControls() {
         disabled: !activeAssetId,
       };
     }
+    if (currentStage === 'animation') {
+      // Animation stage has its own UI for selecting presets
+      return null;
+    }
+    if (currentStage === 'export') {
+      // Export stage has its own download buttons
+      return null;
+    }
     return null;
   };
 
@@ -196,8 +246,22 @@ export function ApprovalControls() {
     return (
       <div className="px-4 py-3 bg-gray-800/50 border-t border-gray-700">
         {error && (
-          <div className="mb-2 p-2 bg-red-900/20 border border-red-700/30 rounded text-sm text-red-400">
-            {error}
+          <div className="mb-2 p-2 bg-red-900/20 border border-red-700/30 rounded text-sm text-red-400 flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {error}
+            </span>
+            <button
+              onClick={dismissError}
+              className="p-1 hover:bg-red-800/30 rounded transition-colors"
+              aria-label="Dismiss error"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           </div>
         )}
         <div className="flex items-center justify-between">
@@ -255,21 +319,36 @@ export function ApprovalControls() {
     return (
       <div className="px-4 py-3 bg-gray-800/50 border-t border-gray-700">
         {error && (
-          <div className="mb-2 p-2 bg-red-900/20 border border-red-700/30 rounded text-sm text-red-400">
-            {error}
+          <div className="mb-2 p-2 bg-red-900/20 border border-red-700/30 rounded text-sm text-red-400 flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {error}
+            </span>
+            <button
+              onClick={dismissError}
+              className="p-1 hover:bg-red-800/30 rounded transition-colors"
+              aria-label="Dismiss error"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           </div>
         )}
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-400">
-            Ready to {currentStage === 'mesh' ? 'generate mesh' :
-                      currentStage === 'texture' ? 'generate texture' :
-                      currentStage === 'rigging' ? 'start rigging' :
-                      'proceed'}
+            {currentStage === 'mesh' && 'Ready to generate mesh'}
+            {currentStage === 'texture' && 'Ready to generate texture'}
+            {currentStage === 'rigging' && 'Ready to start rigging'}
+            {currentStage === 'animation' && 'Add animations using the panel above'}
+            {currentStage === 'export' && 'Download your asset using the export options'}
           </span>
 
           <div className="flex items-center gap-2">
             {/* Skip button for optional stages */}
-            {(currentStage === 'texture' || currentStage === 'rigging') && (
+            {(currentStage === 'texture' || currentStage === 'rigging' || currentStage === 'animation') && (
               <button
                 onClick={skipToExport}
                 className="px-3 py-1.5 text-sm text-gray-400 hover:text-gray-300 transition-colors"
@@ -286,6 +365,16 @@ export function ApprovalControls() {
                 className="px-4 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded transition-colors"
               >
                 {isSubmitting ? 'Starting...' : action.label}
+              </button>
+            )}
+
+            {/* Show approve button for animation stage when animations exist */}
+            {currentStage === 'animation' && (
+              <button
+                onClick={approveStage}
+                className="px-4 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-500 rounded transition-colors"
+              >
+                Continue to Export
               </button>
             )}
 

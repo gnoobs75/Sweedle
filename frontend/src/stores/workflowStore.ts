@@ -1,16 +1,17 @@
 /**
- * Workflow Store - Manages the 4-stage wizard workflow state
+ * Workflow Store - Manages the 5-stage wizard workflow state
  *
  * Stages:
  * 1. Upload -> Mesh Generation
  * 2. Texturing
  * 3. Rigging
- * 4. Export
+ * 4. Animation
+ * 5. Export
  */
 
 import { create } from 'zustand';
 
-export type WorkflowStage = 'upload' | 'mesh' | 'texture' | 'rigging' | 'export';
+export type WorkflowStage = 'upload' | 'mesh' | 'texture' | 'rigging' | 'animation' | 'export';
 export type StageStatus = 'pending' | 'processing' | 'completed' | 'approved' | 'skipped' | 'failed';
 
 interface StageState {
@@ -37,6 +38,7 @@ interface WorkflowState {
     mesh: StageState;
     texture: StageState;
     rigging: StageState;
+    animation: StageState;
     export: StageState;
   };
 
@@ -83,6 +85,7 @@ const defaultStages = {
   mesh: { status: 'pending' as StageStatus },
   texture: { status: 'pending' as StageStatus },
   rigging: { status: 'pending' as StageStatus },
+  animation: { status: 'pending' as StageStatus },
   export: { status: 'pending' as StageStatus },
 };
 
@@ -94,7 +97,7 @@ const defaultPipelineStatus: PipelineStatus = {
 };
 
 // Stage order for navigation
-const stageOrder: WorkflowStage[] = ['upload', 'mesh', 'texture', 'rigging', 'export'];
+const stageOrder: WorkflowStage[] = ['upload', 'mesh', 'texture', 'rigging', 'animation', 'export'];
 
 function getNextStage(current: WorkflowStage): WorkflowStage | null {
   const idx = stageOrder.indexOf(current);
@@ -141,6 +144,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         mesh: { status: 'pending' },
         texture: { status: 'pending' },
         rigging: { status: 'pending' },
+        animation: { status: 'pending' },
         export: { status: 'pending' },
       },
       isProcessing: false,

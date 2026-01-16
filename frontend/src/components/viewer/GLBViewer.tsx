@@ -20,6 +20,7 @@ import {
 import * as THREE from 'three';
 import { useViewerStore } from '../../stores/viewerStore';
 import { useRiggingStore } from '../../stores/riggingStore';
+import { useAnimationStore } from '../../stores/animationStore';
 import { Spinner } from '../ui/Spinner';
 import { SkeletonVisualization } from './SkeletonVisualization';
 
@@ -55,7 +56,7 @@ function Loader() {
 }
 
 /**
- * Model component that loads and displays GLB
+ * Model component that loads and displays GLB with animation support
  */
 function Model({
   url,
@@ -68,6 +69,22 @@ function Model({
 }) {
   const { settings } = useViewerStore();
   const groupRef = useRef<THREE.Group>(null);
+  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+  const actionsRef = useRef<Map<string, THREE.AnimationAction>>(new Map());
+
+  // Animation store
+  const {
+    clips,
+    activeClipId,
+    isPlaying,
+    currentTime,
+    setCurrentTime,
+    setIsPlaying,
+  } = useAnimationStore();
+
+  // Track if we're in a seek operation
+  const lastTimeRef = useRef<number>(0);
+  const isSeeking = useRef<boolean>(false);
 
   // Load the GLB model
   const { scene } = useGLTF(url, true, true, (loader) => {
@@ -145,10 +162,162 @@ function Model({
     });
   }, [clonedScene, settings.showWireframe]);
 
-  // Auto-rotate
+  // Initialize animation mixer
+  useEffect(() => {
+    if (!clonedScene) return;
+
+    const mixer = new THREE.AnimationMixer(clonedScene);
+    mixerRef.current = mixer;
+    actionsRef.current.clear();
+
+    // Handle animation events
+    const onFinished = () => {
+      setIsPlaying(false);
+      setCurrentTime(0);
+    };
+
+    mixer.addEventListener('finished', onFinished as any);
+
+    return () => {
+      mixer.removeEventListener('finished', onFinished as any);
+      mixer.stopAllAction();
+      actionsRef.current.clear();
+      mixerRef.current = null;
+    };
+  }, [clonedScene, setCurrentTime, setIsPlaying]);
+
+  // Load animation clips into mixer
+  useEffect(() => {
+    if (!mixerRef.current) return;
+
+    clips.forEach((clip) => {
+      // Skip if already loaded or no keyframe data
+      if (actionsRef.current.has(clip.id) || !clip.keyframe_data) return;
+
+      try {
+        // Convert backend keyframe data to Three.js tracks
+        const tracks: THREE.KeyframeTrack[] = [];
+
+        for (const track of clip.keyframe_data.tracks) {
+          const targetName = track.bone_name;
+          let trackName: string;
+          let TrackClass: typeof THREE.KeyframeTrack;
+
+          switch (track.property) {
+            case 'rotation':
+              trackName = `${targetName}.quaternion`;
+              TrackClass = THREE.QuaternionKeyframeTrack;
+              break;
+            case 'position':
+              trackName = `${targetName}.position`;
+              TrackClass = THREE.VectorKeyframeTrack;
+              break;
+            case 'scale':
+              trackName = `${targetName}.scale`;
+              TrackClass = THREE.VectorKeyframeTrack;
+              break;
+            default:
+              continue;
+          }
+
+          const keyframeTrack = new TrackClass(
+            trackName,
+            track.times,
+            track.values,
+            THREE.InterpolateLinear
+          );
+          tracks.push(keyframeTrack);
+        }
+
+        // Create animation clip
+        const animClip = new THREE.AnimationClip(
+          clip.name,
+          clip.keyframe_data.duration,
+          tracks
+        );
+
+        // Create action from clip
+        const action = mixerRef.current!.clipAction(animClip);
+
+        // Configure loop mode
+        switch (clip.loop_mode) {
+          case 'loop':
+            action.setLoop(THREE.LoopRepeat, Infinity);
+            break;
+          case 'once':
+            action.setLoop(THREE.LoopOnce, 1);
+            action.clampWhenFinished = true;
+            break;
+          case 'pingpong':
+            action.setLoop(THREE.LoopPingPong, Infinity);
+            break;
+        }
+
+        actionsRef.current.set(clip.id, action);
+        console.log(`Loaded animation: ${clip.name} with ${tracks.length} tracks`);
+      } catch (error) {
+        console.error('Failed to load animation clip:', clip.name, error);
+      }
+    });
+  }, [clips]);
+
+  // Handle play/pause/stop
+  useEffect(() => {
+    if (!mixerRef.current || !activeClipId) return;
+
+    const action = actionsRef.current.get(activeClipId);
+    if (!action) return;
+
+    // Stop all other actions
+    actionsRef.current.forEach((a, id) => {
+      if (id !== activeClipId) {
+        a.stop();
+      }
+    });
+
+    if (isPlaying) {
+      action.reset();
+      action.play();
+    } else {
+      action.paused = true;
+    }
+  }, [activeClipId, isPlaying]);
+
+  // Handle seek (when currentTime changes while paused)
+  useEffect(() => {
+    if (!mixerRef.current || !activeClipId || isPlaying) return;
+
+    const action = actionsRef.current.get(activeClipId);
+    if (!action) return;
+
+    // Detect if this is a user-initiated seek (time changed significantly)
+    const timeDiff = Math.abs(currentTime - lastTimeRef.current);
+    if (timeDiff > 0.05) {
+      // User seeked - update action time
+      action.paused = false;
+      action.time = currentTime;
+      mixerRef.current.update(0); // Force update to show the new frame
+      action.paused = true;
+    }
+    lastTimeRef.current = currentTime;
+  }, [currentTime, activeClipId, isPlaying]);
+
+  // Update mixer and current time on each frame
   useFrame((_, delta) => {
-    if (settings.autoRotate && groupRef.current) {
+    // Auto-rotate (disabled during animation playback)
+    if (settings.autoRotate && !isPlaying && groupRef.current) {
       groupRef.current.rotation.y += delta * 0.5;
+    }
+
+    // Update animation mixer
+    if (mixerRef.current && isPlaying) {
+      mixerRef.current.update(delta);
+
+      // Update current time in store
+      const activeAction = activeClipId ? actionsRef.current.get(activeClipId) : null;
+      if (activeAction) {
+        setCurrentTime(activeAction.time);
+      }
     }
   });
 

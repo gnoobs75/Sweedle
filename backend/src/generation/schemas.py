@@ -135,3 +135,35 @@ class QueueStatusResponse(BaseModel):
     pending_count: int
     processing_count: int
     completed_count: int
+
+
+# Text-to-Image schemas
+
+class TextToImageRequest(BaseModel):
+    """Request for text-to-image generation."""
+    prompt: str = Field(..., min_length=3, max_length=500, description="Text description of the image to generate")
+    style_preset: str = Field("game_asset", description="Style preset ID")
+    negative_prompt: Optional[str] = Field(None, max_length=500, description="Things to avoid in generation")
+    seed: Optional[int] = Field(None, ge=0, le=4294967295, description="Random seed for reproducibility")
+    num_inference_steps: int = Field(30, ge=10, le=50, description="Number of diffusion steps")
+    guidance_scale: float = Field(7.5, ge=1.0, le=20.0, description="How closely to follow the prompt")
+    width: int = Field(1024, description="Image width")
+    height: int = Field(1024, description="Image height")
+
+
+class TextToImageResponse(BaseModel):
+    """Response from text-to-image generation."""
+    success: bool
+    image_id: str
+    image_url: str
+    seed_used: int
+    prompt_used: str
+    generation_time: float
+    error: Optional[str] = None
+
+
+class StylePresetResponse(BaseModel):
+    """Style preset info."""
+    id: str
+    name: str
+    description: str

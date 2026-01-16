@@ -364,3 +364,46 @@ export async function exportToEngineUnified(params: {
     error: response.error,
   };
 }
+
+/**
+ * Regenerate thumbnail for an asset
+ */
+export async function regenerateThumbnail(
+  assetId: string,
+  options?: {
+    width?: number;
+    height?: number;
+    format?: 'png' | 'jpg' | 'webp';
+  }
+): Promise<{
+  success: boolean;
+  thumbnailPath?: string;
+  width: number;
+  height: number;
+  fileSizeBytes: number;
+  error?: string;
+}> {
+  const response = await apiClient.post<{
+    success: boolean;
+    asset_id: string;
+    thumbnail_path?: string;
+    width: number;
+    height: number;
+    file_size_bytes: number;
+    error?: string;
+  }>('/export/thumbnail', {
+    asset_id: assetId,
+    width: options?.width ?? 512,
+    height: options?.height ?? 512,
+    format: options?.format ?? 'png',
+  });
+
+  return {
+    success: response.success,
+    thumbnailPath: response.thumbnail_path,
+    width: response.width,
+    height: response.height,
+    fileSizeBytes: response.file_size_bytes,
+    error: response.error,
+  };
+}

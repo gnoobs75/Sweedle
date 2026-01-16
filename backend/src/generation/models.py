@@ -38,7 +38,8 @@ class WorkflowStage(str, enum.Enum):
     MESH_APPROVED = "mesh_approved"     # Mesh approved, ready for texture
     TEXTURED = "textured"               # Texture applied, awaiting approval
     TEXTURE_APPROVED = "texture_approved"  # Texture approved, ready for rigging
-    RIGGED = "rigged"                   # Rigged, ready for export
+    RIGGED = "rigged"                   # Rigged, ready for animation
+    ANIMATED = "animated"               # Animations added, ready for export
     EXPORTED = "exported"               # Final export complete
 
 
@@ -139,6 +140,10 @@ class Asset(Base):
     rigged_mesh_path = Column(String(500), nullable=True)
     rigging_processor = Column(String(50), nullable=True)  # unirig, blender
 
+    # Animation information
+    has_animations = Column(Boolean, default=False)
+    animated_mesh_path = Column(String(500), nullable=True)
+
     # Workflow tracking
     workflow_stage = Column(String(50), default=WorkflowStage.UPLOADED.value)
     mesh_path = Column(String(500), nullable=True)      # Untextured mesh path
@@ -148,6 +153,7 @@ class Asset(Base):
     tags = relationship("Tag", secondary=asset_tags, back_populates="assets")
     projects = relationship("Project", secondary=project_assets, back_populates="assets")
     job = relationship("GenerationJob", back_populates="asset", uselist=False)
+    animations = relationship("AnimationClip", back_populates="asset", cascade="all, delete-orphan")
 
 
 class Project(Base):
@@ -199,3 +205,38 @@ class GenerationJob(Base):
 
     # Relationships
     asset = relationship("Asset", back_populates="job")
+
+
+class AnimationClip(Base):
+    """Animation clip attached to an asset."""
+    __tablename__ = "animation_clips"
+
+    id = Column(String(36), primary_key=True)  # UUID
+    asset_id = Column(String(36), ForeignKey('assets.id', ondelete='CASCADE'), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Animation type
+    animation_type = Column(String(50), nullable=False)  # idle, walk, run, attack, etc.
+    character_type = Column(String(50), nullable=False)  # humanoid, quadruped
+
+    # Parameters (for procedural regeneration)
+    parameters = Column(JSON, nullable=True)  # speed, intensity, blend_factor
+
+    # Animation data
+    duration_seconds = Column(Float, nullable=False)
+    frame_rate = Column(Integer, default=30)
+    loop_mode = Column(String(20), default='loop')  # loop, once, pingpong
+
+    # Keyframe data (for export)
+    keyframe_data = Column(JSON, nullable=True)  # Serialized animation tracks
+
+    # File paths
+    preview_path = Column(String(500), nullable=True)  # Video/GIF preview
+
+    # Timestamps
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Relationship
+    asset = relationship("Asset", back_populates="animations")

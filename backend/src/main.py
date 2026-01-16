@@ -323,12 +323,14 @@ from src.export.router import router as export_router
 from src.rigging.router import router as rigging_router
 from src.pipeline.router import router as pipeline_router
 from src.workflow.router import router as workflow_router
+from src.animation.router import router as animation_router
 
 app.include_router(generation_router, prefix="/api/generation", tags=["Generation"])
 app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
 app.include_router(assets_router, prefix="/api/assets", tags=["Assets"])
 app.include_router(export_router, prefix="/api/export", tags=["Export"])
 app.include_router(rigging_router, prefix="/api", tags=["Rigging"])
+app.include_router(animation_router, prefix="/api", tags=["Animation"])
 app.include_router(pipeline_router, tags=["Pipeline"])
 app.include_router(workflow_router, tags=["Workflow"])
 

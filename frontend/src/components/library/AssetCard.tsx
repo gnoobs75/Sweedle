@@ -6,6 +6,7 @@ import { useState, useCallback } from 'react';
 import { useViewerStore } from '../../stores/viewerStore';
 import { useLibraryStore } from '../../stores/libraryStore';
 import { getAssetModelUrl, getAssetThumbnailUrl } from '../../services/api/assets';
+import { regenerateThumbnail } from '../../services/api/export';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Checkbox } from '../ui/Checkbox';
@@ -29,12 +30,33 @@ export function AssetCard({
   showCheckbox = false,
   className,
 }: AssetCardProps) {
+  const [imageLoading, setImageLoading] = useState(true);
   const [imageError, setImageError] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [thumbnailKey, setThumbnailKey] = useState(0); // For forcing reload
   const [isHovered, setIsHovered] = useState(false);
   const { loadModel } = useViewerStore();
   const { setCurrentAsset } = useLibraryStore();
 
-  const thumbnailUrl = asset.thumbnailPath || getAssetThumbnailUrl(asset.id);
+  // Cache-busted thumbnail URL
+  const baseThumbnailUrl = asset.thumbnailPath || getAssetThumbnailUrl(asset.id);
+  const thumbnailUrl = thumbnailKey > 0 ? `${baseThumbnailUrl}?v=${thumbnailKey}` : baseThumbnailUrl;
+
+  const handleRegenerateThumbnail = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsRegenerating(true);
+    try {
+      await regenerateThumbnail(asset.id);
+      // Reset error state and force reload with new key
+      setImageError(false);
+      setImageLoading(true);
+      setThumbnailKey(prev => prev + 1);
+    } catch (error) {
+      console.error('Failed to regenerate thumbnail:', error);
+    } finally {
+      setIsRegenerating(false);
+    }
+  }, [asset.id]);
 
   const handleClick = useCallback(() => {
     if (onClick) {
@@ -76,18 +98,40 @@ export function AssetCard({
     >
       {/* Thumbnail */}
       <div className="aspect-square bg-surface-light relative overflow-hidden">
+        {/* Loading skeleton */}
+        {imageLoading && !imageError && (
+          <div className="absolute inset-0 flex items-center justify-center bg-surface-light animate-pulse">
+            <svg className="w-10 h-10 text-text-muted/40" fill="none" viewBox="0 0 24 24">
+              <path
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
+              />
+            </svg>
+          </div>
+        )}
+
         {!imageError ? (
           <img
             src={thumbnailUrl}
             alt={asset.name}
-            className="w-full h-full object-cover transition-transform group-hover:scale-105"
-            onError={() => setImageError(true)}
+            className={cn(
+              "w-full h-full object-cover transition-all group-hover:scale-105",
+              imageLoading && "opacity-0"
+            )}
+            onLoad={() => setImageLoading(false)}
+            onError={() => {
+              setImageLoading(false);
+              setImageError(true);
+            }}
             loading="lazy"
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center">
+          <div className="w-full h-full flex flex-col items-center justify-center gap-2 p-4">
             <svg
-              className="w-12 h-12 text-text-muted"
+              className="w-10 h-10 text-text-muted"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -99,6 +143,23 @@ export function AssetCard({
                 d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
               />
             </svg>
+            <button
+              onClick={handleRegenerateThumbnail}
+              disabled={isRegenerating}
+              className="text-xs px-2 py-1 rounded bg-primary/20 hover:bg-primary/30 text-primary transition-colors disabled:opacity-50"
+            >
+              {isRegenerating ? (
+                <span className="flex items-center gap-1">
+                  <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Generating...
+                </span>
+              ) : (
+                'Regenerate Thumbnail'
+              )}
+            </button>
           </div>
         )}
 
