@@ -147,6 +147,255 @@ class Skeleton:
             bone.head = bone.head * scale_factor + offset
             bone.tail = bone.tail * scale_factor + offset
 
+    def fit_arms_to_mesh(self, mesh_vertices: np.ndarray, mesh_bounds: tuple) -> None:
+        """
+        Adjust arm bone positions based on actual mesh geometry.
+
+        Analyzes mesh vertices to find where arms actually are and adjusts
+        the arm bones to follow the mesh pose (T-pose, A-pose, etc).
+
+        Args:
+            mesh_vertices: Numpy array of mesh vertex positions (N, 3)
+            mesh_bounds: Tuple of (min_bound, max_bound) arrays
+        """
+        bbox_min, bbox_max = mesh_bounds
+        mesh_width = bbox_max[0] - bbox_min[0]
+        mesh_height = bbox_max[1] - bbox_min[1]
+        mesh_center_x = (bbox_max[0] + bbox_min[0]) / 2
+
+        # Arm bone names for humanoid
+        left_arm_bones = ["LeftShoulder", "LeftArm", "LeftForeArm", "LeftHand"]
+        right_arm_bones = ["RightShoulder", "RightArm", "RightForeArm", "RightHand"]
+
+        # Check if we have these bones
+        if not all(self.get_bone(b) for b in left_arm_bones + right_arm_bones):
+            return
+
+        # Find shoulder height from skeleton (should already be scaled)
+        left_shoulder = self.get_bone("LeftShoulder")
+        if not left_shoulder:
+            return
+
+        shoulder_height = left_shoulder.head[1]
+
+        # Analyze left arm
+        left_arm_info = self._find_arm_trajectory(
+            mesh_vertices, mesh_center_x, shoulder_height, mesh_width, side="left"
+        )
+        if left_arm_info:
+            self._adjust_arm_bones(left_arm_bones, left_arm_info, side="left")
+
+        # Analyze right arm
+        right_arm_info = self._find_arm_trajectory(
+            mesh_vertices, mesh_center_x, shoulder_height, mesh_width, side="right"
+        )
+        if right_arm_info:
+            self._adjust_arm_bones(right_arm_bones, right_arm_info, side="right")
+
+    def _find_arm_trajectory(
+        self,
+        vertices: np.ndarray,
+        center_x: float,
+        shoulder_height: float,
+        mesh_width: float,
+        side: str,
+    ) -> Optional[dict]:
+        """
+        Find the arm trajectory by analyzing mesh vertices.
+
+        Args:
+            vertices: Mesh vertices
+            center_x: X coordinate of mesh center
+            shoulder_height: Estimated shoulder Y coordinate
+            mesh_width: Total mesh width
+            side: "left" or "right"
+
+        Returns:
+            Dict with shoulder_pos, elbow_pos, hand_pos, arm_direction
+        """
+        # Determine which side we're analyzing
+        if side == "left":
+            # Left arm: X > center (positive X direction)
+            side_vertices = vertices[vertices[:, 0] > center_x + mesh_width * 0.05]
+        else:
+            # Right arm: X < center (negative X direction)
+            side_vertices = vertices[vertices[:, 0] < center_x - mesh_width * 0.05]
+
+        if len(side_vertices) < 10:
+            return None
+
+        # Find vertices in the arm region (near shoulder height, extending outward)
+        # Shoulder region: Y within 15% of shoulder height
+        height_tolerance = mesh_width * 0.4  # Allow significant Y variation for A-pose
+        arm_region = side_vertices[
+            np.abs(side_vertices[:, 1] - shoulder_height) < height_tolerance
+        ]
+
+        if len(arm_region) < 5:
+            return None
+
+        # Find the extremity (hand position) - furthest point from center on this side
+        if side == "left":
+            distances = arm_region[:, 0] - center_x
+        else:
+            distances = center_x - arm_region[:, 0]
+
+        # Get the most extreme points (top 5% by distance)
+        extreme_threshold = np.percentile(distances, 95)
+        extreme_vertices = arm_region[distances >= extreme_threshold]
+
+        if len(extreme_vertices) < 2:
+            return None
+
+        # Hand position: average of extreme vertices
+        hand_pos = np.mean(extreme_vertices, axis=0)
+
+        # Shoulder position: find vertices closest to skeleton shoulder
+        shoulder_bone = self.get_bone(f"{'Left' if side == 'left' else 'Right'}Shoulder")
+        if not shoulder_bone:
+            return None
+
+        shoulder_region_center = shoulder_bone.head.copy()
+        dists_to_shoulder = np.linalg.norm(arm_region - shoulder_region_center, axis=1)
+        closest_to_shoulder = arm_region[np.argsort(dists_to_shoulder)[:max(5, len(arm_region) // 10)]]
+        shoulder_pos = np.mean(closest_to_shoulder, axis=0)
+
+        # Calculate arm direction vector
+        arm_direction = hand_pos - shoulder_pos
+        arm_length = np.linalg.norm(arm_direction)
+
+        if arm_length < mesh_width * 0.1:
+            return None
+
+        arm_direction = arm_direction / arm_length
+
+        # Elbow position: midpoint along arm, slightly below direct line for natural bend
+        elbow_pos = shoulder_pos + arm_direction * arm_length * 0.45
+        # Add slight backward bend for more natural elbow position
+        elbow_pos[2] -= arm_length * 0.02
+
+        return {
+            "shoulder_pos": shoulder_pos,
+            "elbow_pos": elbow_pos,
+            "hand_pos": hand_pos,
+            "arm_direction": arm_direction,
+            "arm_length": arm_length,
+        }
+
+    def _adjust_arm_bones(self, bone_names: list, arm_info: dict, side: str) -> None:
+        """
+        Adjust arm bone positions based on detected arm trajectory.
+
+        Args:
+            bone_names: List of bone names [Shoulder, Arm, ForeArm, Hand]
+            arm_info: Dict with shoulder_pos, elbow_pos, hand_pos
+            side: "left" or "right"
+        """
+        shoulder_bone = self.get_bone(bone_names[0])
+        upper_arm_bone = self.get_bone(bone_names[1])
+        forearm_bone = self.get_bone(bone_names[2])
+        hand_bone = self.get_bone(bone_names[3])
+
+        if not all([shoulder_bone, upper_arm_bone, forearm_bone, hand_bone]):
+            return
+
+        shoulder_pos = arm_info["shoulder_pos"]
+        elbow_pos = arm_info["elbow_pos"]
+        hand_pos = arm_info["hand_pos"]
+        arm_length = arm_info["arm_length"]
+
+        # Keep shoulder head in place (connected to spine), adjust tail
+        shoulder_direction = (shoulder_pos - shoulder_bone.head)
+        if np.linalg.norm(shoulder_direction) > 0.001:
+            shoulder_direction = shoulder_direction / np.linalg.norm(shoulder_direction)
+            shoulder_bone.tail = shoulder_bone.head + shoulder_direction * shoulder_bone.length
+
+        # Upper arm: from shoulder tail to elbow
+        upper_arm_bone.head = shoulder_bone.tail.copy()
+        upper_arm_direction = elbow_pos - upper_arm_bone.head
+        upper_arm_length = arm_length * 0.35  # Upper arm is about 35% of total arm
+        if np.linalg.norm(upper_arm_direction) > 0.001:
+            upper_arm_direction = upper_arm_direction / np.linalg.norm(upper_arm_direction)
+        upper_arm_bone.tail = upper_arm_bone.head + upper_arm_direction * upper_arm_length
+
+        # Forearm: from elbow to wrist
+        forearm_bone.head = upper_arm_bone.tail.copy()
+        forearm_direction = hand_pos - forearm_bone.head
+        forearm_length = arm_length * 0.35  # Forearm is about 35% of total arm
+        if np.linalg.norm(forearm_direction) > 0.001:
+            forearm_direction = forearm_direction / np.linalg.norm(forearm_direction)
+        forearm_bone.tail = forearm_bone.head + forearm_direction * forearm_length
+
+        # Hand: from wrist extending in same direction
+        hand_bone.head = forearm_bone.tail.copy()
+        hand_length = arm_length * 0.15  # Hand is about 15% of arm length
+        hand_bone.tail = hand_bone.head + forearm_direction * hand_length
+
+        # Update finger bones if they exist
+        self._adjust_finger_bones(hand_bone, forearm_direction, side)
+
+    def _adjust_finger_bones(self, hand_bone: Bone, arm_direction: np.ndarray, side: str) -> None:
+        """
+        Adjust finger bone positions to follow the hand direction.
+
+        Args:
+            hand_bone: The hand bone
+            arm_direction: Direction the arm is pointing
+            side: "left" or "right"
+        """
+        prefix = "Left" if side == "left" else "Right"
+        finger_names = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
+
+        # Calculate a perpendicular direction for thumb spread
+        up = np.array([0, 1, 0])
+        side_dir = np.cross(arm_direction, up)
+        if np.linalg.norm(side_dir) > 0.001:
+            side_dir = side_dir / np.linalg.norm(side_dir)
+        else:
+            side_dir = np.array([0, 0, 1])
+
+        for i, finger in enumerate(finger_names):
+            # Get finger bones (3 segments per finger)
+            bone1 = self.get_bone(f"{prefix}Hand{finger}1")
+            bone2 = self.get_bone(f"{prefix}Hand{finger}2")
+            bone3 = self.get_bone(f"{prefix}Hand{finger}3")
+
+            if not all([bone1, bone2, bone3]):
+                continue
+
+            # Calculate finger direction (spread slightly from arm direction)
+            spread_angle = (i - 2) * 0.1  # -0.2 to +0.2 radians spread
+            finger_dir = arm_direction + side_dir * spread_angle
+            if np.linalg.norm(finger_dir) > 0.001:
+                finger_dir = finger_dir / np.linalg.norm(finger_dir)
+
+            # Thumb points more to the side
+            if finger == "Thumb":
+                thumb_dir = side_dir * (1 if side == "left" else -1) + arm_direction * 0.5
+                if np.linalg.norm(thumb_dir) > 0.001:
+                    finger_dir = thumb_dir / np.linalg.norm(thumb_dir)
+
+            # Position finger bones starting from hand tail
+            base_pos = hand_bone.tail.copy()
+
+            # Finger segment lengths (proportional to hand)
+            hand_length = np.linalg.norm(hand_bone.tail - hand_bone.head)
+            seg1_len = hand_length * 0.5
+            seg2_len = hand_length * 0.35
+            seg3_len = hand_length * 0.25
+
+            # First segment
+            bone1.head = base_pos.copy()
+            bone1.tail = bone1.head + finger_dir * seg1_len
+
+            # Second segment
+            bone2.head = bone1.tail.copy()
+            bone2.tail = bone2.head + finger_dir * seg2_len
+
+            # Third segment
+            bone3.head = bone2.tail.copy()
+            bone3.tail = bone3.head + finger_dir * seg3_len
+
 
 def create_bone(
     name: str,

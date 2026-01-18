@@ -8,6 +8,7 @@ import { useUIStore } from '../stores/uiStore';
 import { useQueueStore } from '../stores/queueStore';
 import { useLibraryStore } from '../stores/libraryStore';
 import { useGenerationStore } from '../stores/generationStore';
+import { useGenerationLogStore } from '../stores/generationLogStore';
 import { useRiggingStore, type CharacterType } from '../stores/riggingStore';
 import { useViewerStore } from '../stores/viewerStore';
 import { useWorkflowStore } from '../stores/workflowStore';
@@ -40,6 +41,14 @@ export function useWebSocket() {
     setPipelineStatus,
     setProcessing: setWorkflowProcessing,
   } = useWorkflowStore();
+  const {
+    addLog,
+    setProgress: setLogProgress,
+    setComplete: setLogComplete,
+    setFailed: setLogFailed,
+    currentJobId: logJobId,
+    isModalOpen: logModalOpen,
+  } = useGenerationLogStore();
 
   // Message handler
   const handleMessage = useCallback(
@@ -348,18 +357,92 @@ export function useWebSocket() {
 
         case 'pipeline_status': {
           logger.debug('WebSocket', 'Pipeline status update', {
-            shapeLoaded: message.shape_loaded,
-            textureLoaded: message.texture_loaded,
-            vramAllocated: message.vram_allocated_gb,
-            vramFree: message.vram_free_gb,
+            stage: message.stage,
+            shapeState: message.shape_state,
+            textureState: message.texture_state,
+            vramUsed: message.vram_used_gb,
+            message: message.message,
           });
 
           setPipelineStatus({
-            shapeLoaded: message.shape_loaded,
-            textureLoaded: message.texture_loaded,
-            vramAllocatedGb: message.vram_allocated_gb,
-            vramFreeGb: message.vram_free_gb,
+            // Legacy fields for backward compatibility
+            shapeLoaded: message.shape_state === 'ready',
+            textureLoaded: message.texture_state === 'ready',
+            vramAllocatedGb: message.vram_used_gb || 0,
+            vramFreeGb: message.vram_free_gb || 24,
+            // New lazy loading fields
+            currentStage: message.stage || 'idle',
+            shapeState: message.shape_state || 'unloaded',
+            textureState: message.texture_state || 'unloaded',
+            statusMessage: message.message || '',
           });
+          break;
+        }
+
+        case 'pipeline_loading': {
+          logger.info('WebSocket', 'Pipeline loading progress', {
+            pipeline: message.pipeline,
+            progress: message.progress,
+            message: message.message,
+          });
+
+          // Update pipeline status with loading state
+          setPipelineStatus({
+            vramAllocatedGb: message.vram_used_gb || 0,
+            vramFreeGb: (message.vram_total_gb || 24) - (message.vram_used_gb || 0),
+            currentStage: message.pipeline === 'shape' ? 'mesh' : 'texture',
+            shapeState: message.pipeline === 'shape' ? 'loading' : 'unloaded',
+            textureState: message.pipeline === 'texture' ? 'loading' : 'unloaded',
+            statusMessage: message.message || 'Loading...',
+          });
+          break;
+        }
+
+        case 'heartbeat': {
+          // Update pipeline status from heartbeat (keeps UI in sync)
+          logger.debug('WebSocket', 'Heartbeat received', {
+            stage: message.stage,
+            status: message.status,
+            vramUsed: message.vram_used_gb,
+          });
+
+          setPipelineStatus({
+            vramAllocatedGb: message.vram_used_gb || 0,
+            vramFreeGb: message.vram_free_gb || 24,
+            currentStage: message.stage || 'idle',
+            statusMessage: message.status || '',
+          });
+          break;
+        }
+
+        case 'generation_log': {
+          // Handle detailed generation log messages for the log modal
+          logger.debug('WebSocket', 'Generation log', {
+            jobId: message.job_id,
+            level: message.level,
+            stage: message.stage,
+            message: message.message,
+          });
+
+          // Only process if the log modal is open and this is the tracked job
+          if (logModalOpen && message.job_id === logJobId) {
+            addLog({
+              level: message.level,
+              stage: message.stage,
+              message: message.message,
+            });
+
+            if (message.progress !== undefined) {
+              setLogProgress(message.progress, message.stage);
+            }
+
+            // Check for completion or failure
+            if (message.level === 'success' && message.stage === 'COMPLETE') {
+              setLogComplete();
+            } else if (message.level === 'error') {
+              setLogFailed(message.message);
+            }
+          }
           break;
         }
       }
@@ -389,6 +472,12 @@ export function useWebSocket() {
       setStageStatus,
       setPipelineStatus,
       setWorkflowProcessing,
+      addLog,
+      setLogProgress,
+      setLogComplete,
+      setLogFailed,
+      logJobId,
+      logModalOpen,
     ]
   );
 

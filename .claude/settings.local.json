@@ -82,7 +82,13 @@
       "WebFetch(domain:deepwiki.com)",
       "WebFetch(domain:hunyuan3dai.com)",
       "Bash(if exist backenddatasweedle.db del backenddatasweedle.db)",
-      "Bash(venvScriptspython.exe:*)"
+      "Bash(venvScriptspython.exe:*)",
+      "Bash(C:ClaudeSweedlebackendvenvScriptspython.exe -c \"import sqlite3; conn = sqlite3.connect\\(''C:/Claude/Sweedle/backend/data/sweedle.db''\\); cursor = conn.cursor\\(\\); cursor.execute\\(\"\"UPDATE assets SET has_texture = 0 WHERE id = ''20a9ea13-c279-4c17-b895-6cb6bbc6b71d''\"\"\\); conn.commit\\(\\); print\\(f''Updated {cursor.rowcount} row\\(s\\)''\\); conn.close\\(\\)\")",
+      "Bash(cmd /c \"C:\\\\Claude\\\\Sweedle\\\\backend\\\\venv\\\\Scripts\\\\python.exe -c \"\"import sqlite3; conn = sqlite3.connect\\(''C:/Claude/Sweedle/backend/data/sweedle.db''\\); cursor = conn.cursor\\(\\); cursor.execute\\(''UPDATE assets SET has_texture = 0 WHERE id = ''''20a9ea13-c279-4c17-b895-6cb6bbc6b71d''''''\\); conn.commit\\(\\); print\\(''Updated'', cursor.rowcount, ''row\\(s\\)''\\); conn.close\\(\\)\"\"\")",
+      "Bash(cmd /c \"cd /d C:\\\\Claude\\\\Sweedle\\\\backend && venv\\\\Scripts\\\\python.exe -c \"\"import sqlite3; c=sqlite3.connect\\(''data/sweedle.db''\\); c.execute\\(''UPDATE assets SET has_texture=0 WHERE id=?'', [''20a9ea13-c279-4c17-b895-6cb6bbc6b71d'']\\); c.commit\\(\\); print\\(''Reset done''\\); c.close\\(\\)\"\"\")",
+      "Bash(cmd /c \"cd /d C:\\\\Claude\\\\Sweedle\\\\backend && venv\\\\Scripts\\\\python.exe -c \"\"import sqlite3; c=sqlite3.connect\\(''data/sweedle.db''\\); r=c.execute\\(''SELECT id, has_texture FROM assets WHERE id=?'', [''20a9ea13-c279-4c17-b895-6cb6bbc6b71d'']\\).fetchone\\(\\); print\\(''Asset:'', r if r else ''Not found''\\); c.close\\(\\)\"\"\")",
+      "Bash(cmd.exe /c \"cd /d C:\\\\Claude\\\\Sweedle\\\\backend && venv\\\\Scripts\\\\python.exe reset_texture.py\")",
+      "Bash(git stash:*)"
     ]
   }
 }

@@ -244,7 +244,7 @@ class UniRigProcessor(BaseRiggingProcessor):
         character_type: CharacterType,
         analysis: CharacterAnalysis,
     ) -> Skeleton:
-        """Create skeleton fitted to mesh dimensions."""
+        """Create skeleton fitted to mesh dimensions with mesh-aware arm placement."""
         from ..skeleton import create_humanoid_skeleton, create_quadruped_skeleton
 
         # Create base skeleton from template
@@ -258,6 +258,17 @@ class UniRigProcessor(BaseRiggingProcessor):
         mesh_center = np.array(analysis.center_of_mass)
 
         skeleton.scale_to_mesh(mesh_height, mesh_center)
+
+        # For humanoid characters, fit arm bones to actual mesh geometry
+        # This handles T-pose, A-pose, and other arm positions
+        if character_type == CharacterType.HUMANOID:
+            try:
+                mesh_bounds = (mesh.bounds[0], mesh.bounds[1])
+                skeleton.fit_arms_to_mesh(mesh.vertices, mesh_bounds)
+                logger.info("Fitted arm bones to mesh geometry")
+            except Exception as e:
+                logger.warning(f"Could not fit arms to mesh: {e}")
+                # Fall back to default template positions (already scaled)
 
         return skeleton
 

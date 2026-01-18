@@ -144,37 +144,39 @@ async def readiness_check():
     """Check if backend is fully initialized and ready for requests.
 
     Frontend should poll this until ready=true before showing the main UI.
+
+    Note: With lazy loading, the pipeline is NOT loaded at startup.
+    The backend is "ready" once the worker is running, even if no
+    models are loaded yet. Models load on-demand for each stage.
     """
     from src.core.device import get_device_info
-    from src.inference.pipeline import get_pipeline
+    from src.inference.pipeline_manager import get_pipeline_manager
 
     # Check core components
     worker_ready = app.state.worker is not None and app.state.worker.is_running
     queue_ready = app.state.job_queue is not None
     ws_ready = app.state.ws_manager is not None
 
-    # Check pipeline is initialized (not necessarily loaded to GPU yet)
-    pipeline = get_pipeline()
-    pipeline_initialized = pipeline is not None
+    # Get pipeline manager status (lazy loading - may not have models loaded)
+    pipeline_manager = get_pipeline_manager()
+    pm_status = pipeline_manager.get_status()
 
     # Check GPU availability
     device_info = get_device_info()
-    gpu_available = device_info.get("cuda_available", False)
+    gpu_available = device_info.get("is_cuda", False) or device_info.get("is_gpu", False)
 
-    # All systems go?
-    ready = all([worker_ready, queue_ready, ws_ready, pipeline_initialized])
+    # Backend is ready once worker is running (models load on-demand)
+    ready = all([worker_ready, queue_ready, ws_ready])
 
     # Get loading status message
     if not queue_ready:
         status_message = "Initializing job queue..."
     elif not ws_ready:
         status_message = "Initializing WebSocket..."
-    elif not pipeline_initialized:
-        status_message = "Loading AI models..."
     elif not worker_ready:
         status_message = "Starting background worker..."
     else:
-        status_message = "Ready"
+        status_message = "Ready (models load on-demand)"
 
     return {
         "ready": ready,
@@ -183,15 +185,45 @@ async def readiness_check():
             "worker": worker_ready,
             "queue": queue_ready,
             "websocket": ws_ready,
-            "pipeline": pipeline_initialized,
+            "pipeline_manager": True,  # Always available
             "gpu": gpu_available,
+        },
+        "pipeline": {
+            "mode": "lazy",  # Lazy loading mode
+            "current_stage": pm_status.current_stage.value,
+            "shape_state": pm_status.shape_state.value,
+            "texture_state": pm_status.texture_state.value,
+            "vram_used_gb": pm_status.vram_used_gb,
+            "vram_free_gb": pm_status.vram_free_gb,
+            "status_message": pm_status.status_message,
         },
         "gpu": {
             "available": gpu_available,
-            "name": device_info.get("gpu_name", "Unknown"),
-            "vram_gb": device_info.get("gpu_memory_gb", 0),
+            "name": device_info.get("memory", {}).get("device_name", "Unknown") if device_info.get("memory") else "Unknown",
+            "vram_total_gb": pm_status.vram_total_gb,
+            "vram_used_gb": pm_status.vram_used_gb,
+            "vram_free_gb": pm_status.vram_free_gb,
         } if gpu_available else None,
     }
+
+
+# Pipeline health check endpoint
+@app.get("/api/pipeline/health")
+async def pipeline_health():
+    """Get detailed pipeline manager health status.
+
+    Provides real-time information about:
+    - Current stage
+    - Which models are loaded
+    - VRAM usage
+    - Heartbeat status
+    """
+    from src.inference.pipeline_manager import get_pipeline_manager
+
+    pipeline_manager = get_pipeline_manager()
+    health = await pipeline_manager.health_check()
+
+    return health
 
 
 # Device info endpoint

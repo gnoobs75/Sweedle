@@ -90,9 +90,15 @@ class Settings(BaseSettings):
     CUDA_MEMORY_FRACTION: float = 0.95  # Use up to 95% of VRAM (default: unlimited)
     ENABLE_MEMORY_EFFICIENT_ATTENTION: bool = True
 
-    # Model loading settings
-    ENABLE_TEXTURE_PIPELINE: bool = True  # Load texture generation (18GB extra VRAM)
-    LAZY_MODEL_LOADING: bool = False  # If True, load models on first job instead of startup
+    # Pipeline Manager Settings (Lazy Loading)
+    PIPELINE_MODE: Literal["lazy", "preload"] = "lazy"  # lazy = on-demand, preload = at startup
+    ENABLE_TEXTURE_GENERATION: bool = True  # Enable texture pipeline capability
+    PIPELINE_HEARTBEAT_INTERVAL: int = 30  # Seconds between heartbeat broadcasts
+    PIPELINE_IDLE_TIMEOUT: int = 0  # Auto-unload after N seconds idle (0 = never)
+
+    # Legacy settings (kept for backward compatibility)
+    ENABLE_TEXTURE_PIPELINE: bool = True  # Alias for ENABLE_TEXTURE_GENERATION
+    LAZY_MODEL_LOADING: bool = True  # Alias for PIPELINE_MODE=lazy
 
     # === Text-to-Image (SDXL) Settings ===
     ENABLE_TEXT_TO_IMAGE: bool = True  # Enable text-to-image feature

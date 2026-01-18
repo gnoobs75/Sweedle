@@ -8,3 +8,5 @@ export { AdvancedModePanel } from './AdvancedModePanel';
 export { ImageUploader } from './ImageUploader';
 export { ParameterControls, SimpleParameterControls } from './ParameterControls';
 export { GenerationProgress, CompactProgress } from './GenerationProgress';
+export { GenerationLogModal } from './GenerationLogModal';
+export type { LogEntry } from './GenerationLogModal';

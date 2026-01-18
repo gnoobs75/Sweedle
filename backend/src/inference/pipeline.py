@@ -631,7 +631,8 @@ class Hunyuan3DPipeline:
                 logger.info(f"Simplifying mesh from {mesh_faces:,} to {MAX_TEXTURE_FACES:,} faces for texture generation")
                 try:
                     # Create a simplified copy for texture, keep original for final output
-                    texture_mesh = mesh.simplify_quadric_decimation(MAX_TEXTURE_FACES)
+                    # Use face_count parameter (not percent) for target face count
+                    texture_mesh = mesh.simplify_quadric_decimation(face_count=MAX_TEXTURE_FACES)
                     simplified_faces = len(texture_mesh.faces) if hasattr(texture_mesh, 'faces') else 0
                     logger.info(f"Simplified mesh for texture: {simplified_faces:,} faces")
                     # Use simplified mesh for texture generation
@@ -1090,3 +1091,311 @@ async def initialize_pipeline() -> Hunyuan3DPipeline:
     pipeline = get_pipeline()
     await pipeline.initialize()
     return pipeline
+
+
+# =============================================================================
+# Standalone functions for PipelineManager integration
+# =============================================================================
+# These functions work with pre-loaded pipelines from PipelineManager,
+# enabling clean stage-based VRAM management.
+
+
+async def generate_mesh(
+    pipeline,
+    image: Image.Image,
+    config: GenerationConfig,
+    output_dir: Path,
+    asset_id: str,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> GenerationResult:
+    """
+    Generate a 3D mesh from an image using a pre-loaded shape pipeline.
+
+    This is a standalone function that works with PipelineManager - the pipeline
+    should already be loaded and on GPU before calling this function.
+
+    Args:
+        pipeline: Pre-loaded shape pipeline (Hunyuan3DDiTFlowMatchingPipeline)
+        image: Preprocessed PIL Image (background already removed)
+        config: Generation configuration
+        output_dir: Directory to save output files
+        asset_id: Asset ID for naming
+        progress_callback: Optional callback for progress updates
+
+    Returns:
+        GenerationResult with mesh path and statistics
+    """
+    import torch
+    import trimesh
+    from concurrent.futures import ThreadPoolExecutor
+
+    start_time = time.time()
+    executor = ThreadPoolExecutor(max_workers=2)
+    loop = asyncio.get_running_loop()
+
+    def update_progress(progress: float, stage: str):
+        if progress_callback:
+            progress_callback(progress, stage)
+
+    try:
+        update_progress(0.0, "Starting mesh generation...")
+
+        # Step 1: Run shape generation
+        update_progress(0.05, "Generating 3D shape...")
+
+        # Create a holder for tqdm progress that can be shared with the executor
+        tqdm_progress_holder = {"stage": "", "percent": 0.0, "current": 0, "total": 0}
+
+        def run_shape_generation():
+            """Synchronous shape generation with tqdm capture."""
+            from src.core.tqdm_capture import capture_tqdm_progress
+
+            generator = None
+            if config.seed is not None:
+                gen_device = "cuda" if torch.cuda.is_available() else "cpu"
+                generator = torch.Generator(device=gen_device)
+                generator.manual_seed(config.seed)
+
+            # Callback for tqdm progress - updates the holder
+            def on_tqdm_progress(stage: str, percent: float, current: int, total: int):
+                tqdm_progress_holder["stage"] = stage
+                tqdm_progress_holder["percent"] = percent
+                tqdm_progress_holder["current"] = current
+                tqdm_progress_holder["total"] = total
+                # Map tqdm stages to overall progress (5% to 70%)
+                # Diffusion Sampling is 5-50%, Volume Decoding is 50-70%
+                if "Diffusion" in stage:
+                    overall = 0.05 + percent * 0.45
+                elif "Volume" in stage or "Decod" in stage:
+                    overall = 0.50 + percent * 0.20
+                else:
+                    overall = 0.05 + percent * 0.60
+                # Call the progress callback with detailed stage info
+                if progress_callback:
+                    progress_callback(overall, f"{stage}: {current}/{total}")
+
+            with torch.inference_mode():
+                # Capture tqdm output during inference
+                with capture_tqdm_progress(on_tqdm_progress, min_update_interval=0.3):
+                    result = pipeline(
+                        image=image,
+                        num_inference_steps=config.inference_steps,
+                        guidance_scale=config.guidance_scale,
+                        octree_resolution=config.octree_resolution,
+                        generator=generator,
+                        output_type='trimesh',
+                    )
+
+            mesh = result[0] if isinstance(result, (list, tuple)) else result
+
+            # Convert to CPU-only trimesh
+            try:
+                if hasattr(mesh, 'vertices') and hasattr(mesh.vertices, 'cpu'):
+                    import numpy as np
+                    vertices = mesh.vertices.cpu().numpy() if hasattr(mesh.vertices, 'cpu') else np.array(mesh.vertices)
+                    faces = mesh.faces.cpu().numpy() if hasattr(mesh.faces, 'cpu') else np.array(mesh.faces)
+                    mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+            except Exception as e:
+                logger.warning(f"Could not convert mesh to CPU: {e}")
+
+            return mesh
+
+        mesh = await loop.run_in_executor(executor, run_shape_generation)
+        update_progress(0.70, "Shape generated")
+
+        # Step 2: Post-process - decimation if needed
+        if config.face_count and hasattr(mesh, 'faces'):
+            current_faces = len(mesh.faces)
+            if current_faces > config.face_count:
+                update_progress(0.75, f"Decimating mesh ({current_faces:,} -> {config.face_count:,} faces)...")
+
+                def decimate():
+                    target_faces = config.face_count
+                    logger.info(f"Decimating: {current_faces:,} -> {target_faces:,} faces")
+                    # Use face_count parameter (not percent) for target face count
+                    return mesh.simplify_quadric_decimation(face_count=target_faces)
+
+                mesh = await loop.run_in_executor(executor, decimate)
+                logger.info(f"Decimated to {len(mesh.faces):,} faces")
+
+        update_progress(0.85, "Saving mesh...")
+
+        # Step 3: Save mesh
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{asset_id}.{config.output_format.value}"
+
+        def save_mesh():
+            mesh.export(str(output_path))
+            return len(mesh.vertices), len(mesh.faces)
+
+        vertex_count, face_count = await loop.run_in_executor(executor, save_mesh)
+        logger.info(f"Saved mesh: {vertex_count:,} vertices, {face_count:,} faces")
+
+        # Step 4: Generate thumbnail
+        update_progress(0.92, "Generating thumbnail...")
+        thumbnail_path = output_dir / "thumbnail.png"
+
+        def generate_thumbnail():
+            try:
+                import matplotlib
+                matplotlib.use('Agg')
+                import matplotlib.pyplot as plt
+                from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+                import numpy as np
+
+                fig = plt.figure(figsize=(2.56, 2.56), facecolor='#1a1a2e')
+                ax = fig.add_subplot(111, projection='3d', facecolor='#1a1a2e')
+
+                vertices = np.array(mesh.vertices)
+                faces = np.array(mesh.faces)
+
+                # Sample faces for performance
+                if len(faces) > 5000:
+                    indices = np.random.choice(len(faces), 5000, replace=False)
+                    faces_sample = faces[indices]
+                else:
+                    faces_sample = faces
+
+                poly = Poly3DCollection(
+                    vertices[faces_sample],
+                    alpha=1.0,
+                    facecolor='#4a90d9',
+                    edgecolor='#2d5a87',
+                    linewidth=0.1,
+                )
+                ax.add_collection3d(poly)
+
+                # Set limits
+                center = vertices.mean(axis=0)
+                max_range = np.abs(vertices - center).max() * 1.2
+                ax.set_xlim([center[0] - max_range, center[0] + max_range])
+                ax.set_ylim([center[1] - max_range, center[1] + max_range])
+                ax.set_zlim([center[2] - max_range, center[2] + max_range])
+                ax.set_axis_off()
+                ax.view_init(elev=20, azim=45)
+
+                thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
+                fig.savefig(str(thumbnail_path), format='png', facecolor=fig.get_facecolor(),
+                           bbox_inches='tight', pad_inches=0, dpi=100)
+                plt.close(fig)
+
+                # Resize
+                from PIL import Image as PILImage
+                img = PILImage.open(thumbnail_path)
+                img = img.resize((256, 256), PILImage.Resampling.LANCZOS)
+                img.save(thumbnail_path)
+
+                return True
+            except Exception as e:
+                logger.warning(f"Thumbnail failed: {e}")
+                return False
+
+        await loop.run_in_executor(executor, generate_thumbnail)
+
+        generation_time = time.time() - start_time
+        update_progress(1.0, "Complete")
+
+        return GenerationResult(
+            success=True,
+            mesh_path=output_path,
+            thumbnail_path=thumbnail_path if thumbnail_path.exists() else None,
+            vertex_count=vertex_count,
+            face_count=face_count,
+            generation_time=generation_time,
+            parameters=config.to_dict(),
+        )
+
+    except Exception as e:
+        logger.exception(f"Mesh generation failed: {e}")
+        return GenerationResult(
+            success=False,
+            error=str(e),
+            generation_time=time.time() - start_time,
+            parameters=config.to_dict(),
+        )
+    finally:
+        executor.shutdown(wait=False)
+
+
+async def generate_texture_on_mesh(
+    pipeline,
+    mesh,
+    image: Image.Image,
+    output_path: Path,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> tuple[bool, Optional[str]]:
+    """
+    Add texture to an existing mesh using a pre-loaded texture pipeline.
+
+    This is a standalone function that works with PipelineManager - the texture
+    pipeline should already be loaded and on GPU before calling this function.
+
+    Args:
+        pipeline: Pre-loaded texture pipeline (Hunyuan3DPaintPipeline)
+        mesh: Trimesh mesh to texture
+        image: Source image for texture generation
+        output_path: Path to save textured mesh
+        progress_callback: Optional callback for progress updates
+
+    Returns:
+        Tuple of (success: bool, error_message: Optional[str])
+    """
+    import torch
+    from concurrent.futures import ThreadPoolExecutor
+
+    executor = ThreadPoolExecutor(max_workers=2)
+    loop = asyncio.get_running_loop()
+
+    def update_progress(progress: float, stage: str):
+        if progress_callback:
+            progress_callback(progress, stage)
+
+    try:
+        update_progress(0.0, "Starting texture generation...")
+
+        if pipeline is None:
+            return False, "Texture pipeline not loaded"
+
+        # Simplify mesh if too complex for texture
+        MAX_TEXTURE_FACES = 30000
+        mesh_for_texture = mesh
+        if hasattr(mesh, 'faces') and len(mesh.faces) > MAX_TEXTURE_FACES:
+            update_progress(0.1, f"Simplifying mesh for texture...")
+            try:
+                # Use face_count parameter (not percent) for target face count
+                mesh_for_texture = mesh.simplify_quadric_decimation(face_count=MAX_TEXTURE_FACES)
+                logger.info(f"Simplified to {len(mesh_for_texture.faces):,} faces for texture")
+            except Exception as e:
+                logger.warning(f"Simplification failed: {e}")
+
+        update_progress(0.2, "Generating texture...")
+
+        def run_texture_generation():
+            """Synchronous texture generation."""
+            with torch.inference_mode():
+                textured_mesh = pipeline(
+                    mesh=mesh_for_texture,
+                    image=image,
+                )
+            return textured_mesh
+
+        textured_mesh = await loop.run_in_executor(executor, run_texture_generation)
+
+        update_progress(0.9, "Saving textured mesh...")
+
+        def save_textured():
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            textured_mesh.export(str(output_path))
+
+        await loop.run_in_executor(executor, save_textured)
+
+        update_progress(1.0, "Texture complete")
+        logger.info(f"Saved textured mesh to {output_path}")
+
+        return True, None
+
+    except Exception as e:
+        logger.exception(f"Texture generation failed: {e}")
+        return False, str(e)
+    finally:
+        executor.shutdown(wait=False)

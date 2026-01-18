@@ -24,6 +24,11 @@ interface PipelineStatus {
   textureLoaded: boolean;
   vramAllocatedGb: number;
   vramFreeGb: number;
+  // New fields for lazy loading mode
+  currentStage: string;
+  shapeState: 'unloaded' | 'loading' | 'ready' | 'unloading' | 'error';
+  textureState: 'unloaded' | 'loading' | 'ready' | 'unloading' | 'error';
+  statusMessage: string;
 }
 
 interface WorkflowState {
@@ -94,6 +99,10 @@ const defaultPipelineStatus: PipelineStatus = {
   textureLoaded: false,
   vramAllocatedGb: 0,
   vramFreeGb: 24, // Default assumption
+  currentStage: 'idle',
+  shapeState: 'unloaded',
+  textureState: 'unloaded',
+  statusMessage: 'Idle (Lazy Loading)',
 };
 
 // Stage order for navigation

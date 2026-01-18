@@ -265,13 +265,15 @@ class LODGenerator:
                         if hasattr(geom, 'faces'):
                             target_faces = int(len(geom.faces) * ratio)
                             target_faces = max(target_faces, 100)
-                            geom = geom.simplify_quadric_decimation(target_faces)
+                            # Use face_count parameter (not percent) for target face count
+                            geom = geom.simplify_quadric_decimation(face_count=target_faces)
                             mesh.geometry[name] = geom
                 elif hasattr(mesh, 'faces'):
                     # Single mesh
                     target_faces = int(len(mesh.faces) * ratio)
                     target_faces = max(target_faces, 100)
-                    mesh = mesh.simplify_quadric_decimation(target_faces)
+                    # Use face_count parameter (not percent) for target face count
+                    mesh = mesh.simplify_quadric_decimation(face_count=target_faces)
 
                 mesh.export(str(output_path))
                 return output_path.exists()

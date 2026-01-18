@@ -183,12 +183,27 @@ class ImagePreprocessor:
         elif image.mode != "RGBA":
             image = image.convert("RGBA")
 
-        # Center crop to square if needed
-        if center_crop and image.width != image.height:
-            size = min(image.width, image.height)
-            left = (image.width - size) // 2
-            top = (image.height - size) // 2
-            image = image.crop((left, top, left + size, top + size))
+        # Make square by PADDING (not cropping) to preserve full image content
+        # This is critical for tall characters where cropping would cut off feet/head
+        if image.width != image.height:
+            # Use the larger dimension to create a square canvas
+            size = max(image.width, image.height)
+
+            # Create transparent square canvas
+            square_image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+
+            # Center the original image on the canvas
+            paste_x = (size - image.width) // 2
+            paste_y = (size - image.height) // 2
+
+            # Paste using alpha channel as mask if available
+            if image.mode == "RGBA":
+                square_image.paste(image, (paste_x, paste_y), image)
+            else:
+                square_image.paste(image, (paste_x, paste_y))
+
+            image = square_image
+            logger.debug(f"Padded image from {image.width}x{image.height} to {size}x{size} square")
 
         # Resize to target size
         if image.width != target_size or image.height != target_size:

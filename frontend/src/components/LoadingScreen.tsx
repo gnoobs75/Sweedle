@@ -1,8 +1,21 @@
 /**
  * LoadingScreen - Shows while waiting for backend to be ready
+ *
+ * Now supports lazy loading mode where models are NOT loaded at startup.
+ * Backend is "ready" once worker is running, models load on-demand.
  */
 
 import { useEffect, useState } from 'react';
+
+interface PipelineStatus {
+  mode: string;
+  current_stage: string;
+  shape_state: string;
+  texture_state: string;
+  vram_used_gb: number;
+  vram_free_gb: number;
+  status_message: string;
+}
 
 interface ReadinessStatus {
   ready: boolean;
@@ -11,13 +24,16 @@ interface ReadinessStatus {
     worker: boolean;
     queue: boolean;
     websocket: boolean;
-    pipeline: boolean;
+    pipeline_manager: boolean;
     gpu: boolean;
   };
+  pipeline: PipelineStatus;
   gpu: {
     available: boolean;
     name: string;
-    vram_gb: number;
+    vram_total_gb: number;
+    vram_used_gb: number;
+    vram_free_gb: number;
   } | null;
 }
 
@@ -117,11 +133,11 @@ export function LoadingScreen({ onReady }: LoadingScreenProps) {
 
       {/* Component status checklist */}
       {components && (
-        <div className="bg-gray-800/50 rounded-lg p-4 min-w-[280px]">
+        <div className="bg-gray-800/50 rounded-lg p-4 min-w-[320px]">
           <div className="space-y-2">
             <StatusItem label="Job Queue" ready={components.queue} />
             <StatusItem label="WebSocket" ready={components.websocket} />
-            <StatusItem label="AI Pipeline" ready={components.pipeline} />
+            <StatusItem label="Pipeline Manager" ready={components.pipeline_manager} />
             <StatusItem label="Background Worker" ready={components.worker} />
             <StatusItem
               label={`GPU${status.gpu ? ` (${status.gpu.name})` : ''}`}
@@ -129,14 +145,45 @@ export function LoadingScreen({ onReady }: LoadingScreenProps) {
               optional
             />
           </div>
+
+          {/* Pipeline mode indicator */}
+          {status?.pipeline && (
+            <div className="mt-4 pt-3 border-t border-gray-700">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-gray-400">Pipeline Mode:</span>
+                <span className="text-indigo-400 font-medium">
+                  {status.pipeline.mode === 'lazy' ? 'Lazy Loading' : 'Preload'}
+                </span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                Models load on-demand when you generate
+              </p>
+            </div>
+          )}
         </div>
       )}
 
-      {/* GPU info */}
+      {/* GPU / VRAM info */}
       {status?.gpu && (
-        <p className="mt-4 text-sm text-gray-500">
-          {status.gpu.vram_gb}GB VRAM available
-        </p>
+        <div className="mt-4 text-center">
+          <p className="text-sm text-gray-400">
+            VRAM: {status.gpu.vram_used_gb?.toFixed(1) || '0'} / {status.gpu.vram_total_gb?.toFixed(0) || '24'} GB used
+          </p>
+          <div className="mt-2 w-48 h-2 bg-gray-700 rounded-full overflow-hidden mx-auto">
+            <div
+              className={`h-full transition-all ${
+                (status.gpu.vram_used_gb / status.gpu.vram_total_gb) > 0.9
+                  ? 'bg-red-500'
+                  : (status.gpu.vram_used_gb / status.gpu.vram_total_gb) > 0.7
+                  ? 'bg-yellow-500'
+                  : 'bg-green-500'
+              }`}
+              style={{
+                width: `${Math.min(100, (status.gpu.vram_used_gb / status.gpu.vram_total_gb) * 100)}%`
+              }}
+            />
+          </div>
+        </div>
       )}
 
       {/* Error hint */}

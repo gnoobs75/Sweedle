@@ -393,6 +393,105 @@ class WebSocketManager:
         }
         await self.broadcast(message)
 
+    async def send_pipeline_loading(
+        self,
+        pipeline_name: str,
+        progress: float,
+        message_text: str,
+        vram_used_gb: float = 0,
+        vram_total_gb: float = 24,
+    ) -> None:
+        """Send detailed pipeline loading progress.
+
+        Args:
+            pipeline_name: Name of pipeline being loaded (shape, texture)
+            progress: Loading progress (0.0-1.0)
+            message_text: Status message
+            vram_used_gb: Current VRAM usage
+            vram_total_gb: Total VRAM
+        """
+        message = {
+            "type": "pipeline_loading",
+            "pipeline": pipeline_name,
+            "progress": progress,
+            "message": message_text,
+            "vram_used_gb": vram_used_gb,
+            "vram_total_gb": vram_total_gb,
+            "vram_percent": round((vram_used_gb / vram_total_gb) * 100, 1) if vram_total_gb > 0 else 0,
+        }
+        await self.broadcast(message)
+
+    async def send_generation_log(
+        self,
+        job_id: str,
+        level: str,
+        stage: str,
+        message: str,
+        progress: Optional[float] = None,
+        asset_id: Optional[str] = None,
+        details: Optional[dict] = None,
+    ) -> None:
+        """Send detailed generation log entry for live log display.
+
+        Args:
+            job_id: Job ID
+            level: Log level (info, debug, warn, error, success, system)
+            stage: Current processing stage
+            message: Log message
+            progress: Optional progress value (0.0-1.0)
+            asset_id: Associated asset ID
+            details: Optional additional details
+        """
+        log_message = {
+            "type": "generation_log",
+            "job_id": job_id,
+            "level": level,
+            "stage": stage,
+            "message": message,
+        }
+
+        if progress is not None:
+            log_message["progress"] = progress
+
+        if asset_id is not None:
+            log_message["asset_id"] = asset_id
+
+        if details is not None:
+            log_message["details"] = details
+
+        await self.broadcast(log_message)
+
+    async def send_heartbeat(
+        self,
+        stage: str,
+        status: str,
+        vram_used_gb: float,
+        vram_free_gb: float,
+        is_processing: bool = False,
+        current_job_id: Optional[str] = None,
+    ) -> None:
+        """Send heartbeat to indicate system is alive and healthy.
+
+        Args:
+            stage: Current workflow stage
+            status: Current status message
+            vram_used_gb: Current VRAM usage
+            vram_free_gb: Free VRAM
+            is_processing: Whether currently processing a job
+            current_job_id: ID of current job being processed
+        """
+        message = {
+            "type": "heartbeat",
+            "stage": stage,
+            "status": status,
+            "vram_used_gb": vram_used_gb,
+            "vram_free_gb": vram_free_gb,
+            "is_processing": is_processing,
+            "current_job_id": current_job_id,
+            "healthy": True,
+        }
+        await self.broadcast(message)
+
 
 # Global manager instance
 _manager: Optional[WebSocketManager] = None

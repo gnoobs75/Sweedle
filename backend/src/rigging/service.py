@@ -161,7 +161,8 @@ class RiggingService:
                 progress_callback(0.05, f"Decimating mesh ({original_vertices:,} -> {target_vertices:,} vertices)...")
 
             # Use quadric decimation (preserves shape better)
-            decimated_mesh = mesh.simplify_quadric_decimation(target_faces)
+            # Use face_count parameter (not percent) for target face count
+            decimated_mesh = mesh.simplify_quadric_decimation(face_count=target_faces)
 
             # Verify the result
             final_vertices = len(decimated_mesh.vertices)

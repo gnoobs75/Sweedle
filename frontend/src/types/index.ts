@@ -142,7 +142,10 @@ export type WSMessageType =
   | 'rigging_complete'
   | 'rigging_failed'
   | 'workflow_update'
-  | 'pipeline_status';
+  | 'pipeline_status'
+  | 'pipeline_loading'
+  | 'heartbeat'
+  | 'generation_log';
 
 export interface WSProgressMessage {
   type: 'progress';
@@ -220,10 +223,52 @@ export interface WSWorkflowUpdateMessage {
 
 export interface WSPipelineStatusMessage {
   type: 'pipeline_status';
-  shape_loaded: boolean;
-  texture_loaded: boolean;
-  vram_allocated_gb: number;
+  stage: string;
+  shape_state: 'unloaded' | 'loading' | 'ready' | 'unloading' | 'error';
+  texture_state: 'unloaded' | 'loading' | 'ready' | 'unloading' | 'error';
+  vram_used_gb: number;
   vram_free_gb: number;
+  vram_total_gb: number;
+  message: string;
+  progress: number;
+  is_healthy: boolean;
+  timestamp: number;
+  // Legacy fields for backward compatibility
+  shape_loaded?: boolean;
+  texture_loaded?: boolean;
+  vram_allocated_gb?: number;
+}
+
+export interface WSPipelineLoadingMessage {
+  type: 'pipeline_loading';
+  pipeline: 'shape' | 'texture';
+  progress: number;
+  message: string;
+  vram_used_gb: number;
+  vram_total_gb: number;
+}
+
+export interface WSHeartbeatMessage {
+  type: 'heartbeat';
+  stage: string;
+  status: string;
+  vram_used_gb: number;
+  vram_free_gb: number;
+  is_processing: boolean;
+  current_job_id?: string;
+  timestamp: number;
+}
+
+export interface WSGenerationLogMessage {
+  type: 'generation_log';
+  job_id: string;
+  level: 'info' | 'debug' | 'warn' | 'error' | 'success' | 'system';
+  stage: string;
+  message: string;
+  progress?: number;
+  asset_id?: string;
+  details?: Record<string, unknown>;
+  timestamp: string;
 }
 
 export type WSMessage =
@@ -237,6 +282,9 @@ export type WSMessage =
   | WSRiggingFailedMessage
   | WSWorkflowUpdateMessage
   | WSPipelineStatusMessage
+  | WSPipelineLoadingMessage
+  | WSHeartbeatMessage
+  | WSGenerationLogMessage
   | { type: 'pong' };
 
 // Viewer Types

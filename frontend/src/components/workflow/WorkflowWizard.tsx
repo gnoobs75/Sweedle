@@ -10,18 +10,35 @@
  * 5. Export
  */
 
+import { useEffect, useRef } from 'react';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { useSettingsStore } from '../../stores/settingsStore';
+import { useGenerationLogStore } from '../../stores/generationLogStore';
 import { WorkflowStepper } from './WorkflowStepper';
 import { VRAMIndicator } from './VRAMIndicator';
 import { ApprovalControls } from './ApprovalControls';
 import { UploadStage, MeshStage, TextureStage, RiggingStage, AnimationStage, ExportStage } from './stages';
 import { TutorialPanel, TutorialToggle } from '../tutorial';
 import { getTutorialForStage } from '../../content/tutorials';
+import { GenerationLogModal } from '../generation/GenerationLogModal';
 
 export function WorkflowWizard() {
-  const { isActive, currentStage, stages, resetWorkflow } = useWorkflowStore();
+  const { isActive, currentStage, stages, resetWorkflow, isProcessing, currentJobId: workflowJobId } = useWorkflowStore();
   const { tutorialMode } = useSettingsStore();
+  const {
+    isModalOpen,
+    closeModal,
+    logs,
+    progress,
+    stage: logStage,
+    isComplete,
+    isFailed,
+    title,
+    openModal,
+  } = useGenerationLogStore();
+
+  // Track previous job ID to detect when a new job starts
+  const prevJobIdRef = useRef<string | null>(null);
 
   // Determine the current stage ID for tutorial
   const getCurrentStageId = (): string => {
@@ -36,6 +53,29 @@ export function WorkflowWizard() {
 
   const currentStageId = getCurrentStageId();
   const tutorial = getTutorialForStage(currentStageId);
+
+  // Auto-open modal when mesh or texture processing starts
+  useEffect(() => {
+    // Only trigger when we get a NEW job ID during processing
+    if (isProcessing && workflowJobId && workflowJobId !== prevJobIdRef.current) {
+      prevJobIdRef.current = workflowJobId;
+
+      // Determine title based on current stage
+      let modalTitle = 'NEURAL PROCESSING';
+      if (currentStage === 'mesh' || currentStage === 'upload') {
+        modalTitle = 'MESH GENERATION';
+      } else if (currentStage === 'texture') {
+        modalTitle = 'TEXTURE SYNTHESIS';
+      }
+
+      openModal(workflowJobId, undefined, modalTitle);
+    }
+
+    // Reset when processing stops
+    if (!isProcessing) {
+      prevJobIdRef.current = null;
+    }
+  }, [isProcessing, workflowJobId, currentStage, openModal]);
 
   // Determine which stage component to show
   const renderStageContent = () => {
@@ -102,6 +142,18 @@ export function WorkflowWizard() {
 
       {/* Approval controls */}
       <ApprovalControls />
+
+      {/* Generation Log Modal - auto-opens when processing starts */}
+      <GenerationLogModal
+        isOpen={isModalOpen}
+        onClose={closeModal}
+        logs={logs}
+        progress={progress}
+        stage={logStage}
+        isComplete={isComplete}
+        isFailed={isFailed}
+        title={title}
+      />
     </div>
   );
 }
