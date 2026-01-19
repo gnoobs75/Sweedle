@@ -31,7 +31,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo [1/3] Starting Python backend (DEBUG MODE)...
-start "Sweedle Backend - DEBUG" cmd /k "cd /d %~dp0backend && echo ======================================== && echo   SWEEDLE BACKEND - DEBUG MODE && echo ======================================== && echo. && venv\Scripts\python.exe -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug"
+start "Sweedle Backend - DEBUG" cmd /k "cd /d %~dp0backend && echo ======================================== && echo   SWEEDLE BACKEND - DEBUG MODE && echo ======================================== && echo. && venv\Scripts\python.exe -m uvicorn src.main:app --host 0.0.0.0 --port 8001 --reload --log-level debug"
 
 echo Waiting for backend to initialize...
 timeout /t 5 /nobreak >nul
@@ -53,9 +53,9 @@ echo ========================================
 echo   TAURI DEV MODE
 echo ========================================
 echo.
-echo Backend:  http://localhost:8000 (see Backend terminal)
-echo Frontend: http://localhost:5173 (see Frontend terminal)
-echo API Docs: http://localhost:8000/docs
+echo Backend:  http://localhost:8001 (see Backend terminal)
+echo Frontend: http://localhost:5177 (see Frontend terminal)
+echo API Docs: http://localhost:8001/docs
 echo.
 echo Close this window to stop Tauri.
 echo Close the other terminals to stop backend/frontend.

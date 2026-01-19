@@ -7,7 +7,7 @@ import { useWorkflowStore } from '../../../stores/workflowStore';
 import { useAnimationStore } from '../../../stores/animationStore';
 import { exportWithAnimations } from '../../../services/api/animation';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'http://localhost:8001';
 
 export function ExportStage() {
   const { stages, activeAssetId } = useWorkflowStore();

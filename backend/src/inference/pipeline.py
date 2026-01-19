@@ -401,6 +401,7 @@ class Hunyuan3DPipeline:
                 if self._texture_pipeline is not None and self.device == "cuda":
                     try:
                         import torch
+                        import gc
                         self._texture_pipeline.to("cpu")
                         gc.collect()
                         torch.cuda.empty_cache()
@@ -412,6 +413,7 @@ class Hunyuan3DPipeline:
                 if shape_unloaded:
                     try:
                         import torch
+                        import gc
                         gc.collect()
                         torch.cuda.empty_cache()
 
@@ -1341,9 +1343,9 @@ async def generate_texture_on_mesh(
         Tuple of (success: bool, error_message: Optional[str])
     """
     import torch
-    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import time as time_module
 
-    executor = ThreadPoolExecutor(max_workers=2)
     loop = asyncio.get_running_loop()
 
     def update_progress(progress: float, stage: str):
@@ -1351,43 +1353,143 @@ async def generate_texture_on_mesh(
             progress_callback(progress, stage)
 
     try:
+        logger.info("generate_texture_on_mesh called")
         update_progress(0.0, "Starting texture generation...")
 
         if pipeline is None:
+            logger.error("Texture pipeline is None!")
             return False, "Texture pipeline not loaded"
 
+        logger.info(f"Pipeline type: {type(pipeline)}")
+        logger.info(f"Mesh type: {type(mesh)}, vertices: {len(mesh.vertices) if hasattr(mesh, 'vertices') else 'N/A'}")
+        logger.info(f"Image type: {type(image)}, size: {image.size if hasattr(image, 'size') else 'N/A'}")
+
+        # Log VRAM before texture and verify we have enough headroom
+        if torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated(0) / 1e9
+            total = torch.cuda.get_device_properties(0).total_memory / 1e9
+            free_vram = total - allocated
+            logger.info(f"VRAM before texture: {allocated:.2f}GB allocated, {free_vram:.2f}GB free")
+
+            # Verify we have enough VRAM for texture generation
+            # Texture needs ~10GB additional headroom during inference
+            MIN_FREE_VRAM = 8.0
+            if free_vram < MIN_FREE_VRAM:
+                error_msg = (
+                    f"Insufficient VRAM for texture: {free_vram:.1f}GB free (need {MIN_FREE_VRAM}GB). "
+                    f"Try clearing other GPU applications or reducing mesh complexity."
+                )
+                logger.error(error_msg)
+                return False, error_msg
+
         # Simplify mesh if too complex for texture
-        MAX_TEXTURE_FACES = 30000
+        # Conservative limit for stability - can increase once stable
+        MAX_TEXTURE_FACES = 15000  # Reduced from 30000 for stability
         mesh_for_texture = mesh
         if hasattr(mesh, 'faces') and len(mesh.faces) > MAX_TEXTURE_FACES:
-            update_progress(0.1, f"Simplifying mesh for texture...")
+            update_progress(0.1, f"Simplifying mesh for texture ({len(mesh.faces):,} -> {MAX_TEXTURE_FACES:,} faces)...")
             try:
-                # Use face_count parameter (not percent) for target face count
                 mesh_for_texture = mesh.simplify_quadric_decimation(face_count=MAX_TEXTURE_FACES)
                 logger.info(f"Simplified to {len(mesh_for_texture.faces):,} faces for texture")
             except Exception as e:
-                logger.warning(f"Simplification failed: {e}")
+                logger.warning(f"Simplification failed: {e}, using original mesh")
 
+        logger.info(f"Mesh for texture: {len(mesh_for_texture.faces):,} faces")
         update_progress(0.2, "Generating texture...")
 
-        def run_texture_generation():
-            """Synchronous texture generation."""
-            with torch.inference_mode():
-                textured_mesh = pipeline(
-                    mesh=mesh_for_texture,
-                    image=image,
-                )
-            return textured_mesh
+        # Use a heartbeat thread to show progress while texture generates
+        texture_done = threading.Event()
+        texture_start = time_module.time()
 
-        textured_mesh = await loop.run_in_executor(executor, run_texture_generation)
+        def heartbeat_with_progress():
+            """Background thread to log progress during texture generation."""
+            UPDATE_INTERVAL = 5.0
+            while not texture_done.is_set():
+                elapsed = time_module.time() - texture_start
+                # Log VRAM during generation
+                vram_str = ""
+                if torch.cuda.is_available():
+                    try:
+                        allocated = torch.cuda.memory_allocated(0) / 1e9
+                        vram_str = f" (VRAM: {allocated:.1f}GB)"
+                    except:
+                        pass
+                logger.info(f"Texture generation in progress... {elapsed:.1f}s elapsed{vram_str}")
+                if progress_callback:
+                    estimated_progress = min(0.9, 0.2 + (elapsed / 60.0) * 0.7)
+                    try:
+                        progress_callback(estimated_progress, f"Generating texture ({elapsed:.0f}s)...")
+                    except Exception:
+                        pass
+                texture_done.wait(timeout=UPDATE_INTERVAL)
+
+        heartbeat_thread = threading.Thread(target=heartbeat_with_progress, daemon=True)
+        heartbeat_thread.start()
+
+        # Run texture generation in thread pool (like the working version)
+        # The hy3dgen library handles CUDA context properly within its own threads
+        def run_texture_sync():
+            """Synchronous texture generation to run in executor."""
+            logger.info("run_texture_sync: starting texture pipeline call...")
+            try:
+                with torch.inference_mode():
+                    result = pipeline(
+                        mesh=mesh_for_texture,
+                        image=image,
+                    )
+                logger.info(f"run_texture_sync: pipeline returned, type={type(result)}")
+                return result
+            except Exception as e:
+                logger.exception(f"run_texture_sync: exception during pipeline call: {e}")
+                raise
+
+        try:
+            logger.info("Calling texture pipeline via run_in_executor...")
+
+            # Timeout protection: 90 seconds for texture generation with CPU offloading
+            # With CPU offloading and 512px/2 views, should complete in ~30-60s
+            # This prevents hanging forever if CUDA kernel stalls
+            TEXTURE_TIMEOUT_SECONDS = 90
+
+            try:
+                textured_mesh = await asyncio.wait_for(
+                    loop.run_in_executor(None, run_texture_sync),
+                    timeout=TEXTURE_TIMEOUT_SECONDS
+                )
+                logger.info(f"Texture pipeline returned successfully")
+            except asyncio.TimeoutError:
+                texture_elapsed = time_module.time() - texture_start
+                # Get VRAM state for debugging
+                vram_info = ""
+                if torch.cuda.is_available():
+                    try:
+                        allocated = torch.cuda.memory_allocated(0) / 1e9
+                        vram_info = f" (VRAM at timeout: {allocated:.1f}GB)"
+                    except:
+                        pass
+                error_msg = (
+                    f"Texture generation timed out after {texture_elapsed:.0f}s.{vram_info} "
+                    f"Try simplifying the mesh or reducing texture resolution."
+                )
+                logger.error(error_msg)
+                return False, error_msg
+
+        finally:
+            texture_done.set()
+            heartbeat_thread.join(timeout=1)
+
+        texture_elapsed = time_module.time() - texture_start
+        logger.info(f"Texture generation complete in {texture_elapsed:.1f}s")
+
+        # Force CUDA sync to catch any async errors
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            logger.info("CUDA synchronized after texture")
 
         update_progress(0.9, "Saving textured mesh...")
 
-        def save_textured():
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            textured_mesh.export(str(output_path))
-
-        await loop.run_in_executor(executor, save_textured)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        textured_mesh.export(str(output_path))
 
         update_progress(1.0, "Texture complete")
         logger.info(f"Saved textured mesh to {output_path}")
@@ -1397,5 +1499,3 @@ async def generate_texture_on_mesh(
     except Exception as e:
         logger.exception(f"Texture generation failed: {e}")
         return False, str(e)
-    finally:
-        executor.shutdown(wait=False)

@@ -265,9 +265,9 @@ function isTauri(): boolean {
 }
 
 function getWebSocketUrl(): string {
-  // In Tauri, always use localhost:8000 directly
+  // In Tauri, always use localhost:8001 directly
   if (isTauri()) {
-    return 'ws://localhost:8000/ws/progress';
+    return 'ws://localhost:8001/ws/progress';
   }
   // Use environment variable if available
   if (import.meta.env.VITE_WS_BASE_URL) {

@@ -93,7 +93,7 @@ echo.
 
 :: Start backend in background
 echo        Starting backend server...
-start "Sweedle Backend" /min cmd /c "cd backend && ..\backend\venv\Scripts\python.exe -m uvicorn src.main:app --host 127.0.0.1 --port 8000"
+start "Sweedle Backend" /min cmd /c "cd backend && ..\backend\venv\Scripts\python.exe -m uvicorn src.main:app --host 127.0.0.1 --port 8001"
 
 :: Wait for backend to start
 timeout /t 3 /nobreak >nul
@@ -111,9 +111,9 @@ echo  ╔═══════════════════════�
 echo  ║                                                           ║
 echo  ║   Sweedle is starting up!                                 ║
 echo  ║                                                           ║
-echo  ║   Frontend: http://localhost:5173                         ║
-echo  ║   Backend:  http://localhost:8000                         ║
-echo  ║   API Docs: http://localhost:8000/docs                    ║
+echo  ║   Frontend: http://localhost:5177                         ║
+echo  ║   Backend:  http://localhost:8001                         ║
+echo  ║   API Docs: http://localhost:8001/docs                    ║
 echo  ║                                                           ║
 echo  ║   Opening browser...                                      ║
 echo  ║                                                           ║
@@ -121,7 +121,7 @@ echo  ╚═══════════════════════�
 echo.
 
 timeout /t 2 /nobreak >nul
-start http://localhost:5173
+start http://localhost:5177
 
 echo  Press any key to stop Sweedle...
 pause >nul

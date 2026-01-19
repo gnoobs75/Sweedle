@@ -16,7 +16,7 @@ function isTauri(): boolean {
 
 // Get health endpoint URL
 function getHealthUrl(): string {
-  return isTauri() ? 'http://localhost:8000/health' : '/health';
+  return isTauri() ? 'http://localhost:8001/health' : '/health';
 }
 
 interface HealthResponse {

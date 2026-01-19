@@ -50,7 +50,7 @@ export function GPUMonitor({
 
   const fetchStats = useCallback(async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/device/stats');
+      const response = await fetch('http://localhost:8001/api/device/stats');
       if (!response.ok) throw new Error('Failed to fetch stats');
       const data = await response.json();
       setStats(data);
@@ -271,7 +271,7 @@ export function VRAMIndicator({ className }: { className?: string }) {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/device/stats');
+        const response = await fetch('http://localhost:8001/api/device/stats');
         if (response.ok) {
           setStats(await response.json());
         }

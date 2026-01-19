@@ -14,7 +14,7 @@ function isTauri(): boolean {
 // Get API base URL - checked at runtime for each request
 function getApiBase(): string {
   if (isTauri()) {
-    return 'http://localhost:8000/api';
+    return 'http://localhost:8001/api';
   }
   return import.meta.env.VITE_API_BASE_URL
     ? `${import.meta.env.VITE_API_BASE_URL}/api`

@@ -14,7 +14,7 @@ function isTauri(): boolean {
 
 // Storage base URL - in Tauri, use localhost directly
 function getStorageBase(): string {
-  return isTauri() ? 'http://localhost:8000' : '';
+  return isTauri() ? 'http://localhost:8001' : '';
 }
 
 interface ListAssetsParams {

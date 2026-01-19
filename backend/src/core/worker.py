@@ -148,7 +148,7 @@ class BackgroundWorker:
         await self._preprocessor.initialize()
         logger.info("Preprocessor initialized")
 
-        # NOTE: We NO LONGER load the pipeline at startup!
+# NOTE: We NO LONGER load the pipeline at startup!
         # The PipelineManager handles lazy loading when jobs are processed.
         # This provides:
         # 1. Faster startup
