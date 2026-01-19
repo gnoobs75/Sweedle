@@ -94,6 +94,129 @@ The backend includes optimizations for modern NVIDIA GPUs (RTX 30/40 series). Th
 - `torch.inference_mode()` for all generation
 - Flash Attention support
 
+### CRITICAL: Pipeline VRAM Management
+
+**This section documents hard-won lessons about VRAM management that plagued development.**
+
+The RTX 4090 has 24GB VRAM, but the ML models are huge:
+- **Shape pipeline (Hunyuan3D-2.1)**: ~7-8GB loaded, ~21GB during inference
+- **Texture pipeline (Hunyuan3D-2 Paint)**: ~7GB loaded, **17-18GB during inference**
+- **Windows/driver overhead**: ~1-2GB always reserved
+
+**KEY INSIGHT: Only ONE pipeline can run at a time. They CANNOT coexist on GPU.**
+
+#### The Pipeline Handoff Process
+
+When switching from Mesh → Texture stage:
+
+```
+1. UNLOAD SHAPE PIPELINE (pipeline_manager.py:_full_unload)
+   ├── Call _deep_cleanup_pipeline() to move components to CPU
+   ├── Delete pipeline reference
+   ├── Run gc.collect() 3x
+   ├── torch.cuda.synchronize()
+   ├── torch.cuda.empty_cache()
+   ├── torch.cuda.ipc_collect()
+   └── Verify VRAM < 2GB (just driver overhead)
+
+2. LOAD TEXTURE PIPELINE (pipeline_manager.py:_load_texture_pipeline)
+   ├── Load from pretrained (goes to GPU automatically)
+   ├── *** CRITICAL: enable_model_cpu_offload() ***
+   ├── Configure resolution (1024px)
+   └── Configure camera views (4 horizontal)
+
+3. RUN TEXTURE GENERATION (pipeline.py:generate_texture_on_mesh)
+   ├── Check VRAM has 8GB+ free headroom
+   ├── Simplify mesh if > 15k faces
+   ├── Start heartbeat thread (logs VRAM every 5s)
+   ├── Run with 180s timeout protection
+   └── Save textured mesh
+```
+
+#### The CPU Offloading Fix (CRITICAL)
+
+**Problem**: The texture pipeline loads ALL internal models to GPU at once, causing 17GB+ VRAM spike that crashed/locked the system.
+
+**Solution**: Call `enable_model_cpu_offload()` after loading the pipeline:
+
+```python
+self._texture_pipeline = Hunyuan3DPaintPipeline.from_pretrained(...)
+
+# THIS LINE IS CRITICAL - without it, system will lock up!
+self._texture_pipeline.enable_model_cpu_offload()
+```
+
+This tells the pipeline to:
+- Keep models on CPU by default
+- Load each model to GPU only when actively used
+- Automatically offload back to CPU after each step
+- Peak VRAM stays ~10-12GB instead of 17GB+
+
+#### Deep Cleanup Function
+
+The `_deep_cleanup_pipeline()` method ensures thorough VRAM release:
+
+```python
+def _deep_cleanup_pipeline(self, pipeline, name):
+    # Move known components to CPU before deletion
+    components = ['model', 'conditioner', 'vae', 'scheduler',
+                  'text_encoder', 'image_encoder', 'unet', ...]
+    for comp_name in components:
+        if hasattr(pipeline, comp_name):
+            getattr(pipeline, comp_name).to('cpu')
+
+    # Handle hy3dgen's components dict
+    if hasattr(pipeline, 'components'):
+        for comp in pipeline.components.values():
+            comp.to('cpu')
+
+    # Clean VAE surface extractor cache (holds GPU tensors!)
+    if hasattr(pipeline.vae, 'surface_extractor'):
+        if hasattr(pipeline.vae.surface_extractor, 'dmc'):
+            pipeline.vae.surface_extractor.dmc.to('cpu')
+```
+
+#### Texture Generation Settings
+
+Current game-ready settings in `pipeline_manager.py`:
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| Resolution | 1024px | Good quality for game textures |
+| Camera Views | 4 (0°, 90°, 180°, 270°) | Full horizontal coverage |
+| Max Mesh Faces | 15,000 | Prevents VRAM spikes on complex meshes |
+| Timeout | 180 seconds | Fails gracefully instead of hanging |
+| Min Free VRAM | 8GB | Aborts early if insufficient |
+
+#### Debugging VRAM Issues
+
+Watch for these log patterns:
+
+```
+# GOOD - Clean handoff:
+"Full unload complete. VRAM: 7.37GB -> 0.01GB (freed 7.36GB)"
+"Enabled CPU offloading for texture pipeline"
+"Texture pipeline loaded. VRAM: 7.15GB"
+
+# BAD - VRAM not freed:
+"VRAM not fully cleared: 5.23GB still in use"
+"Insufficient VRAM for texture: 6.2GB free (need 8GB)"
+
+# BAD - No CPU offloading (will crash!):
+# Missing: "Enabled CPU offloading for texture pipeline"
+"Texture generation in progress... 5.0s elapsed (VRAM: 17.0GB)"  # TOO HIGH!
+```
+
+#### Common VRAM Issues & Fixes
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| System locks up at texture stage | CPU offloading not enabled | Add `enable_model_cpu_offload()` |
+| "Insufficient VRAM" error | Previous pipeline not unloaded | Check `_full_unload()` ran |
+| VRAM stays high after unload | Leaked GPU tensors | Use `_deep_cleanup_pipeline()` |
+| Texture times out at 180s | Mesh too complex | Reduce to <15k faces |
+| VRAM: 17GB during texture | CPU offloading failed | Verify `enable_model_cpu_offload()` call |
+
 ### Godot-Optimized Quality Presets
 
 Assets are automatically decimated to game-ready vertex counts:
@@ -420,8 +543,12 @@ If `pipeline is None: True`, there's a loading issue.
 **Workaround**: Use Python 3.11.x.
 
 ### Texture Generation
-**Status**: Working (loads from tencent/Hunyuan3D-2, ~18GB)
-**Note**: The texture pipeline loads successfully despite custom_rasterizer warnings.
+**Status**: Working with CPU offloading (CRITICAL!)
+**VRAM**: ~7GB loaded, ~10-12GB during inference (with CPU offloading)
+**Settings**: 1024px resolution, 4 camera views, 180s timeout
+**CRITICAL**: Must call `enable_model_cpu_offload()` after loading pipeline!
+Without CPU offloading, VRAM spikes to 17GB+ and locks up the system.
+See "CRITICAL: Pipeline VRAM Management" section above for full details.
 
 ### Thumbnail Generation
 **Status**: Working with matplotlib headless renderer.

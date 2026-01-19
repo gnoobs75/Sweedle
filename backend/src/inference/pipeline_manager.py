@@ -505,11 +505,10 @@ class PipelineManager:
                 except Exception as e:
                     logger.warning(f"Could not enable CPU offloading: {e}")
 
-            # Optimize texture quality for stability
-            # Start conservative (512px, 2 views) to ensure reliable generation
-            # Can increase later once stability is confirmed
-            # Default is 2048x2048 with 6 camera views which is slow and VRAM-heavy
-            TARGET_RESOLUTION = 512  # Conservative for stability (was 1024)
+            # Texture quality settings for Godot game-ready assets
+            # 1024px with 4 views provides good quality without excessive VRAM
+            # CPU offloading keeps peak VRAM manageable
+            TARGET_RESOLUTION = 1024  # Game-quality textures
 
             if hasattr(self._texture_pipeline, 'render'):
                 render = self._texture_pipeline.render
@@ -522,18 +521,18 @@ class PipelineManager:
                     render.set_default_texture_resolution(TARGET_RESOLUTION)
                 logger.info(f"Optimized texture render: {old_render}->{TARGET_RESOLUTION}, texture: {old_texture}->{TARGET_RESOLUTION}")
 
-            # Reduce camera views to 2 (front and back only) for stability
-            # This dramatically reduces VRAM usage and generation time
+            # Use 4 camera views for good coverage (front, right, back, left)
+            # This provides full horizontal coverage for game-ready textures
             if hasattr(self._texture_pipeline, 'config'):
                 config = self._texture_pipeline.config
                 old_views = len(getattr(config, 'candidate_camera_azims', []))
-                # 2 views only (front + back) for stability - can increase later
-                config.candidate_camera_azims = [0, 180]  # Front and back
-                config.candidate_camera_elevs = [0, 0]
-                config.candidate_view_weights = [1, 0.5]
+                # 4 horizontal views for game-quality textures
+                config.candidate_camera_azims = [0, 90, 180, 270]  # Front, right, back, left
+                config.candidate_camera_elevs = [0, 0, 0, 0]
+                config.candidate_view_weights = [1.0, 0.5, 0.5, 0.5]  # Front weighted higher
                 config.render_size = TARGET_RESOLUTION
                 config.texture_size = TARGET_RESOLUTION
-                logger.info(f"Optimized texture views: {old_views}->2 (front+back only)")
+                logger.info(f"Optimized texture views: {old_views}->4 (horizontal coverage)")
 
             await self._broadcast_status("Texture model loaded", 0.9)
             if progress_callback:

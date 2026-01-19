@@ -1446,10 +1446,10 @@ async def generate_texture_on_mesh(
         try:
             logger.info("Calling texture pipeline via run_in_executor...")
 
-            # Timeout protection: 90 seconds for texture generation with CPU offloading
-            # With CPU offloading and 512px/2 views, should complete in ~30-60s
+            # Timeout protection: 180 seconds for texture generation with CPU offloading
+            # With CPU offloading and 1024px/4 views, should complete in ~60-120s
             # This prevents hanging forever if CUDA kernel stalls
-            TEXTURE_TIMEOUT_SECONDS = 90
+            TEXTURE_TIMEOUT_SECONDS = 180
 
             try:
                 textured_mesh = await asyncio.wait_for(
