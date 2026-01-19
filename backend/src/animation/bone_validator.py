@@ -139,10 +139,10 @@ class BoneValidator:
         "Tail1": ["Tail1", "Tail_02", "tail_02"],
         "Tail2": ["Tail2", "Tail_03", "tail_03"],
         "Jaw": ["Jaw", "jaw", "Mouth", "mouth"],
-        "FrontLeftLeg": ["FrontLeftLeg", "Front_Left_Leg", "leg_front_l", "FrontLeftUpperArm"],
-        "FrontRightLeg": ["FrontRightLeg", "Front_Right_Leg", "leg_front_r", "FrontRightUpperArm"],
-        "BackLeftLeg": ["BackLeftLeg", "Back_Left_Leg", "leg_back_l", "BackLeftUpperLeg"],
-        "BackRightLeg": ["BackRightLeg", "Back_Right_Leg", "leg_back_r", "BackRightUpperLeg"],
+        "FrontLeftLeg": ["FrontLeftLeg", "Front_Left_Leg", "leg_front_l", "FrontLeftUpperArm", "LeftFrontUpperArm", "LeftFrontShoulder"],
+        "FrontRightLeg": ["FrontRightLeg", "Front_Right_Leg", "leg_front_r", "FrontRightUpperArm", "RightFrontUpperArm", "RightFrontShoulder"],
+        "BackLeftLeg": ["BackLeftLeg", "Back_Left_Leg", "leg_back_l", "BackLeftUpperLeg", "LeftBackUpperLeg", "LeftBackHip"],
+        "BackRightLeg": ["BackRightLeg", "Back_Right_Leg", "leg_back_r", "BackRightUpperLeg", "RightBackUpperLeg", "RightBackHip"],
     }
 
     def __init__(self, skeleton: SkeletonData):

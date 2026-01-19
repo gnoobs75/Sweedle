@@ -82,6 +82,11 @@ export function useWebSocket() {
             setIsGenerating(false);
 
             if (message.status === 'completed') {
+              // Mark log modal as complete so it auto-closes
+              if (message.job_id === logJobId) {
+                setLogComplete();
+              }
+
               // Reload model if it's the current one (for texture updates)
               if (message.asset_id && message.asset_id === currentAssetId) {
                 logger.info('WebSocket', 'Reloading model after job completion', { assetId: message.asset_id });
@@ -126,6 +131,11 @@ export function useWebSocket() {
                 message: 'Your 3D model is ready!',
               });
             } else if (message.status === 'failed') {
+              // Mark log modal as failed
+              if (message.job_id === logJobId) {
+                setLogFailed(message.error || 'Job failed');
+              }
+
               // Update workflow store if this is the active workflow
               if (message.asset_id === workflowAssetId) {
                 setWorkflowProcessing(false);

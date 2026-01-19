@@ -136,6 +136,7 @@ class Asset(Base):
     # Rigging information
     is_rigged = Column(Boolean, default=False)
     rigging_data = Column(JSON, nullable=True)  # SkeletonData JSON
+    skinning_data = Column(JSON, nullable=True)  # SkinningData JSON (vertex weights)
     character_type = Column(String(50), nullable=True)  # humanoid, quadruped
     rigged_mesh_path = Column(String(500), nullable=True)
     rigging_processor = Column(String(50), nullable=True)  # unirig, blender

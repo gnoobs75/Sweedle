@@ -14,6 +14,11 @@ interface ViewerState {
   loadError: string | null;
   modelVersion: number; // Cache-busting version
 
+  // Skinned preview mode
+  skinnedPreviewUrl: string | null;
+  isSkinnedPreview: boolean;
+  isGeneratingSkinnedPreview: boolean;
+
   // Model info
   modelInfo: {
     vertexCount?: number;
@@ -48,6 +53,12 @@ interface ViewerState {
   resetCamera: () => void;
   setLodLevel: (level: number) => void;
   setAvailableLodLevels: (levels: number[]) => void;
+
+  // Skinned preview actions
+  setSkinnedPreviewUrl: (url: string | null) => void;
+  setIsSkinnedPreview: (enabled: boolean) => void;
+  setIsGeneratingSkinnedPreview: (generating: boolean) => void;
+  clearSkinnedPreview: () => void;
 }
 
 const defaultSettings: ViewerSettings = {
@@ -78,6 +89,11 @@ export const useViewerStore = create<ViewerState>()(
       cameraTarget: defaultCameraTarget,
       currentLodLevel: 0,
       availableLodLevels: [],
+
+      // Skinned preview
+      skinnedPreviewUrl: null,
+      isSkinnedPreview: false,
+      isGeneratingSkinnedPreview: false,
 
       // Actions
       loadModel: (url, assetId) =>
@@ -146,6 +162,21 @@ export const useViewerStore = create<ViewerState>()(
       setLodLevel: (level) => set({ currentLodLevel: level }),
 
       setAvailableLodLevels: (levels) => set({ availableLodLevels: levels }),
+
+      // Skinned preview actions
+      setSkinnedPreviewUrl: (url) => set({ skinnedPreviewUrl: url }),
+
+      setIsSkinnedPreview: (enabled) => set({ isSkinnedPreview: enabled }),
+
+      setIsGeneratingSkinnedPreview: (generating) =>
+        set({ isGeneratingSkinnedPreview: generating }),
+
+      clearSkinnedPreview: () =>
+        set({
+          skinnedPreviewUrl: null,
+          isSkinnedPreview: false,
+          isGeneratingSkinnedPreview: false,
+        }),
     }),
     {
       name: 'sweedle-viewer',

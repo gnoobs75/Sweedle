@@ -196,11 +196,8 @@ export function ApprovalControls() {
       };
     }
     if (currentStage === 'rigging') {
-      return {
-        label: 'Start Rigging',
-        onClick: handleStartRigging,
-        disabled: !activeAssetId,
-      };
+      // Rigging stage uses landmark editor UI directly, no separate start button
+      return null;
     }
     if (currentStage === 'animation') {
       // Animation stage has its own UI for selecting presets

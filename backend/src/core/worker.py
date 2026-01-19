@@ -642,6 +642,16 @@ class BackgroundWorker:
         await send_log("info", "CONFIG", f"Face count target: {config.face_count or 'unlimited'}")
         await send_log("info", "CONFIG", f"Texture generation: {'enabled' if config.texture.enabled else 'disabled'}")
 
+        # VRAM status
+        try:
+            import torch
+            if torch.cuda.is_available():
+                vram_used = torch.cuda.memory_allocated() / 1e9
+                vram_total = torch.cuda.get_device_properties(0).total_memory / 1e9
+                await send_log("debug", "VRAM", f"VRAM: {vram_used:.1f}GB / {vram_total:.1f}GB ({100*vram_used/vram_total:.1f}% used)")
+        except Exception:
+            pass
+
         # Create progress callback that updates queue and broadcasts
         async def progress_callback(progress: float, stage: str):
             # Scale progress: 0-30% for pipeline loading, 30-100% for generation
@@ -698,6 +708,8 @@ class BackgroundWorker:
         # STEP 2: Generate the mesh
         await send_log("system", "MESH", "Starting 3D mesh generation...", 0.35)
         await send_log("info", "MESH", f"Running Hunyuan3D-2.1 inference with {config.inference_steps} steps")
+        await send_log("debug", "MESH", f"Image size: {processed_image.size[0]}x{processed_image.size[1]}")
+        await send_log("debug", "MESH", "Beginning diffusion sampling (this takes the longest)...")
 
         from src.inference.pipeline import generate_mesh
 
@@ -1092,6 +1104,7 @@ class BackgroundWorker:
                 if asset:
                     asset.is_rigged = True
                     asset.rigging_data = result.skeleton.model_dump() if result.skeleton else None
+                    asset.skinning_data = result.skinning.model_dump() if result.skinning else None
                     asset.character_type = result.detected_type.value if result.detected_type else None
                     asset.rigged_mesh_path = result.rigged_mesh_path
                     asset.rigging_processor = result.processor_used.value if result.processor_used else None

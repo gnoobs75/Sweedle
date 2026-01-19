@@ -2,7 +2,7 @@
  * GLBViewer Component - 3D model viewer using React Three Fiber
  */
 
-import { Suspense, useEffect, useRef, useMemo, Component, ErrorInfo, ReactNode } from 'react';
+import { Suspense, useEffect, useRef, useMemo, Component, ErrorInfo, ReactNode, useCallback } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import {
   OrbitControls,
@@ -18,11 +18,14 @@ import {
   useProgress,
 } from '@react-three/drei';
 import * as THREE from 'three';
+import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { useViewerStore } from '../../stores/viewerStore';
 import { useRiggingStore } from '../../stores/riggingStore';
 import { useAnimationStore } from '../../stores/animationStore';
 import { Spinner } from '../ui/Spinner';
 import { SkeletonVisualization } from './SkeletonVisualization';
+import { LandmarkVisualization } from './LandmarkVisualization';
+import { findNearestPointOnMesh } from '../../utils/meshUtils';
 
 interface GLBViewerProps {
   url: string | null;
@@ -67,10 +70,13 @@ function Model({
   onLoad?: (info: ModelInfo) => void;
   onError?: (error: Error) => void;
 }) {
-  const { settings } = useViewerStore();
+  const { settings, isSkinnedPreview } = useViewerStore();
+  const { skeletonData } = useRiggingStore();
   const groupRef = useRef<THREE.Group>(null);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
   const actionsRef = useRef<Map<string, THREE.AnimationAction>>(new Map());
+  const boneGroupsRef = useRef<Map<string, THREE.Object3D>>(new Map());
+  const embeddedActionsRef = useRef<Map<string, THREE.AnimationAction>>(new Map());
 
   // Animation store
   const {
@@ -86,15 +92,31 @@ function Model({
   const lastTimeRef = useRef<number>(0);
   const isSeeking = useRef<boolean>(false);
 
-  // Load the GLB model
-  const { scene } = useGLTF(url, true, true, (loader) => {
+  // Load the GLB model (with animations if present)
+  const { scene, animations: embeddedAnimations } = useGLTF(url, true, true, (loader) => {
     loader.manager.onError = (url) => {
       onError?.(new Error(`Failed to load: ${url}`));
     };
   });
 
   // Clone the scene to avoid mutation issues
-  const clonedScene = useMemo(() => scene.clone(), [scene]);
+  // Use SkeletonUtils.clone for skinned meshes to preserve skeleton binding
+  const clonedScene = useMemo(() => {
+    // Check if scene has skinned meshes
+    let hasSkinnedMesh = false;
+    scene.traverse((child) => {
+      if (child instanceof THREE.SkinnedMesh) {
+        hasSkinnedMesh = true;
+      }
+    });
+
+    if (hasSkinnedMesh) {
+      console.log('Scene has SkinnedMesh, using SkeletonUtils.clone()');
+      return SkeletonUtils.clone(scene) as THREE.Group;
+    } else {
+      return scene.clone();
+    }
+  }, [scene]);
 
   // Analyze model and report info
   useEffect(() => {
@@ -105,8 +127,25 @@ function Model({
     const materials = new Set<string>();
     let hasTextures = false;
 
+    // Debug: Log what we found in the scene
+    let meshCount = 0;
+    let skinnedMeshCount = 0;
+    let boneCount = 0;
+
     clonedScene.traverse((child) => {
+      if (child instanceof THREE.SkinnedMesh) {
+        skinnedMeshCount++;
+        console.log(`Found SkinnedMesh: ${child.name}`, {
+          skeleton: child.skeleton,
+          bindMode: child.bindMode,
+          bindMatrix: child.bindMatrix,
+        });
+      }
+      if (child instanceof THREE.Bone) {
+        boneCount++;
+      }
       if (child instanceof THREE.Mesh) {
+        meshCount++;
         const geometry = child.geometry;
         if (geometry) {
           vertexCount += geometry.attributes.position?.count || 0;
@@ -137,6 +176,17 @@ function Model({
 
     const boundingBox = new THREE.Box3().setFromObject(clonedScene);
 
+    // Log summary for debugging skinned mesh issues
+    console.log('Scene analysis:', {
+      meshCount,
+      skinnedMeshCount,
+      boneCount,
+      vertexCount,
+      hasTextures,
+      materials: Array.from(materials),
+      isSkinnedPreview,
+    });
+
     onLoad?.({
       vertexCount,
       faceCount: Math.round(faceCount),
@@ -144,7 +194,7 @@ function Model({
       hasTextures,
       boundingBox,
     });
-  }, [clonedScene, onLoad]);
+  }, [clonedScene, onLoad, isSkinnedPreview]);
 
   // Apply wireframe mode
   useEffect(() => {
@@ -162,13 +212,88 @@ function Model({
     });
   }, [clonedScene, settings.showWireframe]);
 
-  // Initialize animation mixer
+  // Create bone objects from skeleton data for animation targeting
+  // Skip this when in skinned preview mode - the GLB already has bones
+  useEffect(() => {
+    if (isSkinnedPreview) {
+      // In skinned preview, bones come from the GLB itself
+      boneGroupsRef.current.forEach((group) => {
+        group.parent?.remove(group);
+      });
+      boneGroupsRef.current.clear();
+      return;
+    }
+
+    if (!clonedScene || !skeletonData?.bones?.length) {
+      // Clear any existing bone groups
+      boneGroupsRef.current.forEach((group) => {
+        group.parent?.remove(group);
+      });
+      boneGroupsRef.current.clear();
+      return;
+    }
+
+    // Clear previous bones
+    boneGroupsRef.current.forEach((group) => {
+      group.parent?.remove(group);
+    });
+    boneGroupsRef.current.clear();
+
+    // Create a bone map for quick lookup
+    const boneDataMap = new Map(skeletonData.bones.map((b) => [b.name, b]));
+
+    // Create Object3D for each bone
+    const boneGroups = new Map<string, THREE.Object3D>();
+    skeletonData.bones.forEach((bone) => {
+      const obj = new THREE.Object3D();
+      obj.name = bone.name;
+      boneGroups.set(bone.name, obj);
+    });
+
+    // Build parent-child hierarchy
+    skeletonData.bones.forEach((bone) => {
+      const obj = boneGroups.get(bone.name);
+      if (!obj) return;
+
+      if (bone.parent) {
+        const parentObj = boneGroups.get(bone.parent);
+        const parentBone = boneDataMap.get(bone.parent);
+        if (parentObj && parentBone) {
+          // Set position relative to parent
+          const parentHead = new THREE.Vector3(...parentBone.headPosition);
+          const localPos = new THREE.Vector3(...bone.headPosition).sub(parentHead);
+          obj.position.copy(localPos);
+          parentObj.add(obj);
+        }
+      } else {
+        // Root bone - add to scene with absolute position
+        obj.position.set(...bone.headPosition);
+        clonedScene.add(obj);
+      }
+    });
+
+    boneGroupsRef.current = boneGroups;
+    console.log(`Created ${boneGroups.size} bone objects for animation:`, Array.from(boneGroups.keys()));
+
+    return () => {
+      // Cleanup on unmount
+      boneGroupsRef.current.forEach((group) => {
+        group.parent?.remove(group);
+      });
+      boneGroupsRef.current.clear();
+    };
+  }, [clonedScene, skeletonData, isSkinnedPreview]);
+
+  // Initialize animation mixer - recreate when skeleton changes to see new bones
   useEffect(() => {
     if (!clonedScene) return;
 
     const mixer = new THREE.AnimationMixer(clonedScene);
     mixerRef.current = mixer;
     actionsRef.current.clear();
+    embeddedActionsRef.current.clear();
+
+    console.log('AnimationMixer initialized for scene:', clonedScene.name);
 
     // Handle animation events
     const onFinished = () => {
@@ -182,17 +307,59 @@ function Model({
       mixer.removeEventListener('finished', onFinished as any);
       mixer.stopAllAction();
       actionsRef.current.clear();
+      embeddedActionsRef.current.clear();
       mixerRef.current = null;
     };
-  }, [clonedScene, setCurrentTime, setIsPlaying]);
+  }, [clonedScene, skeletonData, setCurrentTime, setIsPlaying]);
+
+  // Load embedded animations from skinned GLB (when in skinned preview mode)
+  useEffect(() => {
+    if (!mixerRef.current || !isSkinnedPreview || !embeddedAnimations?.length) return;
+
+    console.log(`Loading ${embeddedAnimations.length} embedded animations from skinned GLB`);
+    embeddedActionsRef.current.clear();
+
+    embeddedAnimations.forEach((animClip, index) => {
+      const action = mixerRef.current!.clipAction(animClip);
+      action.setLoop(THREE.LoopRepeat, Infinity);
+
+      // Use clip name as key, or index if no name
+      const key = animClip.name || `embedded_${index}`;
+      embeddedActionsRef.current.set(key, action);
+      console.log(`Loaded embedded animation: ${key} (${animClip.duration.toFixed(2)}s)`);
+    });
+
+    // Auto-play first embedded animation if we have any
+    if (embeddedAnimations.length > 0 && embeddedActionsRef.current.size > 0) {
+      const firstAction = embeddedActionsRef.current.values().next().value;
+      if (firstAction) {
+        firstAction.reset().play();
+        console.log('Auto-playing first embedded animation');
+      }
+    }
+  }, [embeddedAnimations, isSkinnedPreview]);
 
   // Load animation clips into mixer
   useEffect(() => {
     if (!mixerRef.current) return;
 
+    // Log bones available in scene for debugging
+    const bonesInScene: string[] = [];
+    clonedScene.traverse((obj) => {
+      if (obj !== clonedScene && obj.name) {
+        bonesInScene.push(obj.name);
+      }
+    });
+    console.log('Objects available for animation:', bonesInScene.slice(0, 20), bonesInScene.length > 20 ? `... and ${bonesInScene.length - 20} more` : '');
+
     clips.forEach((clip) => {
       // Skip if already loaded or no keyframe data
-      if (actionsRef.current.has(clip.id) || !clip.keyframe_data) return;
+      if (actionsRef.current.has(clip.id) || !clip.keyframe_data) {
+        if (!clip.keyframe_data) {
+          console.warn(`Animation clip '${clip.name}' has no keyframe data!`);
+        }
+        return;
+      }
 
       try {
         // Convert backend keyframe data to Three.js tracks
@@ -254,16 +421,17 @@ function Model({
         }
 
         actionsRef.current.set(clip.id, action);
-        console.log(`Loaded animation: ${clip.name} with ${tracks.length} tracks`);
+        console.log(`Loaded animation: ${clip.name} with ${tracks.length} tracks, targeting bones:`,
+          clip.keyframe_data.tracks.map(t => t.bone_name));
       } catch (error) {
         console.error('Failed to load animation clip:', clip.name, error);
       }
     });
-  }, [clips]);
+  }, [clips, clonedScene, skeletonData]);
 
-  // Handle play/pause/stop
+  // Handle play/pause/stop for JSON-based animations
   useEffect(() => {
-    if (!mixerRef.current || !activeClipId) return;
+    if (!mixerRef.current || !activeClipId || isSkinnedPreview) return;
 
     const action = actionsRef.current.get(activeClipId);
     if (!action) return;
@@ -281,7 +449,25 @@ function Model({
     } else {
       action.paused = true;
     }
-  }, [activeClipId, isPlaying]);
+  }, [activeClipId, isPlaying, isSkinnedPreview]);
+
+  // Handle play/pause/stop for embedded animations (skinned preview mode)
+  useEffect(() => {
+    if (!mixerRef.current || !isSkinnedPreview || embeddedActionsRef.current.size === 0) return;
+
+    // Control all embedded animations based on play state
+    embeddedActionsRef.current.forEach((action) => {
+      if (isPlaying) {
+        if (action.paused) {
+          action.paused = false;
+        } else if (!action.isRunning()) {
+          action.reset().play();
+        }
+      } else {
+        action.paused = true;
+      }
+    });
+  }, [isPlaying, isSkinnedPreview]);
 
   // Handle seek (when currentTime changes while paused)
   useEffect(() => {
@@ -309,14 +495,22 @@ function Model({
       groupRef.current.rotation.y += delta * 0.5;
     }
 
-    // Update animation mixer
+    // Update animation mixer (always update when playing - works for both modes)
     if (mixerRef.current && isPlaying) {
       mixerRef.current.update(delta);
 
       // Update current time in store
-      const activeAction = activeClipId ? actionsRef.current.get(activeClipId) : null;
-      if (activeAction) {
-        setCurrentTime(activeAction.time);
+      if (isSkinnedPreview) {
+        // Get time from first embedded action
+        const firstAction = embeddedActionsRef.current.values().next().value;
+        if (firstAction) {
+          setCurrentTime(firstAction.time);
+        }
+      } else {
+        const activeAction = activeClipId ? actionsRef.current.get(activeClipId) : null;
+        if (activeAction) {
+          setCurrentTime(activeAction.time);
+        }
       }
     }
   });
@@ -354,7 +548,91 @@ function Scene({
   onError?: (error: Error) => void;
 }) {
   const { settings } = useViewerStore();
-  const { skeletonData, showSkeleton, selectedBone, setSelectedBone } = useRiggingStore();
+  const {
+    skeletonData,
+    showSkeleton,
+    selectedBone,
+    setSelectedBone,
+    floatingBones,
+    editedBones,
+    dragMode,
+    updateBonePosition,
+    isTuningMode,
+    snapRequest,
+    clearSnapRequest,
+    // Landmark mode
+    isLandmarkMode,
+    landmarks,
+    landmarkInfo,
+    selectedLandmark,
+    setSelectedLandmark,
+    updateLandmark,
+  } = useRiggingStore();
+  const { scene: threeScene } = useThree();
+  const meshRef = useRef<THREE.Mesh | null>(null);
+
+  // Find and cache mesh reference from scene
+  useEffect(() => {
+    let foundMesh: THREE.Mesh | null = null;
+    threeScene.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.geometry && !foundMesh) {
+        // Skip very small meshes (likely helpers/gizmos)
+        const posAttr = child.geometry.getAttribute('position');
+        if (posAttr && posAttr.count > 100) {
+          foundMesh = child;
+        }
+      }
+    });
+    meshRef.current = foundMesh;
+  }, [threeScene, url]);
+
+  // Handle snap-to-mesh requests
+  useEffect(() => {
+    if (!snapRequest || !meshRef.current || !skeletonData) {
+      return;
+    }
+
+    const { boneName, target } = snapRequest;
+    const bone = skeletonData.bones.find((b) => b.name === boneName);
+    if (!bone) {
+      clearSnapRequest();
+      return;
+    }
+
+    // Get current positions (edited or original)
+    const edit = editedBones.get(boneName);
+    const currentHead = edit?.headPosition || bone.headPosition;
+    const currentTail = edit?.tailPosition || bone.tailPosition;
+
+    let newHead = currentHead;
+    let newTail = currentTail;
+
+    const mesh = meshRef.current;
+
+    // Snap head position to nearest mesh surface
+    if (target === 'head' || target === 'both') {
+      const headVec = new THREE.Vector3(...currentHead);
+      const nearestHead = findNearestPointOnMesh(mesh, headVec);
+      if (nearestHead) {
+        newHead = [nearestHead.x, nearestHead.y, nearestHead.z] as [number, number, number];
+      }
+    }
+
+    // Snap tail position to nearest mesh surface
+    if (target === 'tail' || target === 'both') {
+      const tailVec = new THREE.Vector3(...currentTail);
+      const nearestTail = findNearestPointOnMesh(mesh, tailVec);
+      if (nearestTail) {
+        newTail = [nearestTail.x, nearestTail.y, nearestTail.z] as [number, number, number];
+      }
+    }
+
+    // Update bone position
+    updateBonePosition(boneName, newHead, newTail);
+    clearSnapRequest();
+
+    console.log(`Snapped bone ${boneName} to mesh surface:`, { newHead, newTail });
+  }, [snapRequest, skeletonData, editedBones, updateBonePosition, clearSnapRequest]);
 
   return (
     <>
@@ -403,8 +681,21 @@ function Scene({
                 visible={showSkeleton}
                 selectedBone={selectedBone}
                 onBoneSelect={setSelectedBone}
+                floatingBones={floatingBones}
+                editedBones={editedBones}
+                dragMode={isTuningMode && dragMode}
+                onBonePositionChange={updateBonePosition}
               />
             )}
+            {/* Landmark overlay for positioning key skeleton points */}
+            <LandmarkVisualization
+              landmarks={landmarks}
+              landmarkInfo={landmarkInfo}
+              selectedLandmark={selectedLandmark}
+              onLandmarkSelect={setSelectedLandmark}
+              onLandmarkMove={updateLandmark}
+              visible={isLandmarkMode}
+            />
           </Center>
         </BoundsHandler>
       </Bounds>
@@ -468,7 +759,17 @@ class CanvasErrorBoundary extends Component<
  * Main GLB Viewer component
  */
 export function GLBViewer({ url, onLoad, onError }: GLBViewerProps) {
-  const { settings, setLoading, setLoadError, setModelInfo } = useViewerStore();
+  const {
+    settings,
+    setLoading,
+    setLoadError,
+    setModelInfo,
+    isSkinnedPreview,
+    skinnedPreviewUrl,
+  } = useViewerStore();
+
+  // Use skinned preview URL when in preview mode
+  const effectiveUrl = isSkinnedPreview && skinnedPreviewUrl ? skinnedPreviewUrl : url;
 
   const handleLoad = (info: ModelInfo) => {
     setLoading(false);
@@ -488,12 +789,12 @@ export function GLBViewer({ url, onLoad, onError }: GLBViewerProps) {
     onError?.(error);
   };
 
-  if (!url) {
+  if (!effectiveUrl) {
     return null;
   }
 
   // Log the URL for debugging
-  console.log('Loading model from URL:', url);
+  console.log('Loading model from URL:', effectiveUrl, isSkinnedPreview ? '(skinned preview)' : '');
 
   return (
     <CanvasErrorBoundary onError={handleError}>
@@ -513,7 +814,7 @@ export function GLBViewer({ url, onLoad, onError }: GLBViewerProps) {
         }}
       >
         <Suspense fallback={<Loader />}>
-          <Scene url={url} onLoad={handleLoad} onError={handleError} />
+          <Scene url={effectiveUrl} onLoad={handleLoad} onError={handleError} />
         </Suspense>
 
         <OrbitControls

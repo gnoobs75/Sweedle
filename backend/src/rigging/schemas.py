@@ -212,3 +212,19 @@ class CharacterAnalysis(BaseModel):
     is_humanoid_likely: bool
     is_quadruped_likely: bool
     confidence: float
+
+
+# ============================================================================
+# Bone Tuning Schemas
+# ============================================================================
+
+class BoneEditData(BaseModel):
+    """Edited bone position data."""
+    bone_name: str = Field(..., description="Name of the bone to update")
+    head_position: tuple[float, float, float] = Field(..., description="New head position (x, y, z)")
+    tail_position: tuple[float, float, float] = Field(..., description="New tail position (x, y, z)")
+
+
+class UpdateSkeletonRequest(BaseModel):
+    """Request to update skeleton bone positions."""
+    edits: list[BoneEditData] = Field(..., description="List of bone position edits")

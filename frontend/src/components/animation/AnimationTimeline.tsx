@@ -5,7 +5,13 @@
  * This component just provides UI controls and displays the current time.
  */
 
+import { useState, useCallback } from 'react';
 import { useAnimationStore } from '../../stores/animationStore';
+import { useViewerStore } from '../../stores/viewerStore';
+import { exportSkinnedGLB } from '../../services/api/export';
+import { Spinner } from '../ui/Spinner';
+
+const API_BASE = 'http://localhost:8001';
 
 export function AnimationTimeline() {
   const {
@@ -18,6 +24,62 @@ export function AnimationTimeline() {
     stop,
     seek,
   } = useAnimationStore();
+
+  const {
+    currentAssetId,
+    isSkinnedPreview,
+    isGeneratingSkinnedPreview,
+    setSkinnedPreviewUrl,
+    setIsSkinnedPreview,
+    setIsGeneratingSkinnedPreview,
+    clearSkinnedPreview,
+  } = useViewerStore();
+
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  const handleToggleSkinnedPreview = useCallback(async () => {
+    if (isSkinnedPreview) {
+      // Exit skinned preview mode
+      clearSkinnedPreview();
+      setPreviewError(null);
+      return;
+    }
+
+    if (!currentAssetId) return;
+
+    // Generate skinned GLB and enable preview
+    setIsGeneratingSkinnedPreview(true);
+    setPreviewError(null);
+
+    try {
+      const result = await exportSkinnedGLB({
+        assetId: currentAssetId,
+        includeAnimations: true,
+      });
+
+      if (result.success && result.outputPath) {
+        // Convert path to URL
+        const previewUrl = `${API_BASE}${result.outputPath.replace(/\\/g, '/')}?t=${Date.now()}`;
+        setSkinnedPreviewUrl(previewUrl);
+        setIsSkinnedPreview(true);
+        console.log('Skinned preview enabled:', previewUrl);
+      } else {
+        throw new Error(result.error || 'Failed to generate skinned preview');
+      }
+    } catch (err) {
+      console.error('Failed to generate skinned preview:', err);
+      setPreviewError(err instanceof Error ? err.message : 'Preview generation failed');
+    } finally {
+      setIsGeneratingSkinnedPreview(false);
+    }
+  }, [
+    currentAssetId,
+    isSkinnedPreview,
+    clearSkinnedPreview,
+    setSkinnedPreviewUrl,
+    setIsSkinnedPreview,
+    setIsGeneratingSkinnedPreview,
+  ]);
 
   // Get active clip duration
   const activeClip = clips.find((c) => c.id === activeClipId);
@@ -37,6 +99,45 @@ export function AnimationTimeline() {
 
   return (
     <div className="p-4 bg-gray-800/30 border-t border-gray-700">
+      {/* Skinned Preview Toggle */}
+      <div className="flex items-center justify-between mb-3">
+        <button
+          onClick={handleToggleSkinnedPreview}
+          disabled={isGeneratingSkinnedPreview}
+          className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+            isSkinnedPreview
+              ? 'bg-green-600 text-white hover:bg-green-500'
+              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+          } disabled:opacity-50 disabled:cursor-not-allowed`}
+          title={isSkinnedPreview ? 'Switch to bone preview' : 'Preview with mesh deformation'}
+        >
+          {isGeneratingSkinnedPreview ? (
+            <>
+              <Spinner size="sm" variant="white" />
+              Generating...
+            </>
+          ) : isSkinnedPreview ? (
+            <>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              Mesh Deformation ON
+            </>
+          ) : (
+            <>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+              Preview Skinned Mesh
+            </>
+          )}
+        </button>
+        {previewError && (
+          <span className="text-xs text-red-400">{previewError}</span>
+        )}
+      </div>
+
       {/* Transport Controls */}
       <div className="flex items-center justify-center gap-4 mb-4">
         {/* Stop */}

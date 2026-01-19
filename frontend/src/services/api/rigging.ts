@@ -202,6 +202,38 @@ export async function getSkeleton(assetId: string): Promise<SkeletonResponse | n
 }
 
 /**
+ * Update skeleton bone positions.
+ */
+export interface BoneEdit {
+  boneName: string;
+  headPosition: [number, number, number];
+  tailPosition: [number, number, number];
+}
+
+export async function updateSkeleton(
+  assetId: string,
+  edits: BoneEdit[]
+): Promise<{ message: string; assetId: string; updatedBones: string[] }> {
+  const response = await apiClient.patch<{
+    message: string;
+    asset_id: string;
+    updated_bones: string[];
+  }>(`/rigging/skeleton/${assetId}`, {
+    edits: edits.map((e) => ({
+      bone_name: e.boneName,
+      head_position: e.headPosition,
+      tail_position: e.tailPosition,
+    })),
+  });
+
+  return {
+    message: response.message,
+    assetId: response.asset_id,
+    updatedBones: response.updated_bones,
+  };
+}
+
+/**
  * Detect the character type of an asset.
  */
 export async function detectCharacterType(assetId: string): Promise<DetectTypeResponse> {

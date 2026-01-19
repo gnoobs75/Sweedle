@@ -13,6 +13,7 @@ from .mesh_optimizer import MeshOptimizer, ValidationResult, OptimizationResult
 from .draco_compressor import DracoCompressor, DracoSettings, CompressionResult
 from .validator import AssetValidator, AssetValidationResult
 from .thumbnail_generator import ThumbnailGenerator, ThumbnailSettings, ThumbnailResult
+from .gltf_skinned import GLTFSkinnedExporter
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,30 @@ class ExportToEngineResponse(BaseModel):
     success: bool
     asset_id: str
     exported_files: list[str]
+    error: Optional[str] = None
+
+
+class ExportSkinnedGLBRequest(BaseModel):
+    """Request for exporting skinned GLB with animations."""
+    asset_id: str
+    include_animations: bool = Field(
+        default=True,
+        description="Include animation clips in the GLB"
+    )
+    animation_ids: Optional[list[str]] = Field(
+        default=None,
+        description="Specific animation IDs to include (None = all)"
+    )
+
+
+class ExportSkinnedGLBResponse(BaseModel):
+    """Response from skinned GLB export."""
+    success: bool
+    asset_id: str
+    output_path: Optional[str] = None
+    bone_count: int = 0
+    animation_count: int = 0
+    file_size_bytes: int = 0
     error: Optional[str] = None
 
 
@@ -396,3 +421,128 @@ async def export_to_engine(request: ExportToEngineRequest, background_tasks: Bac
     except Exception as e:
         logger.error(f"Engine export failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/skinned-glb", response_model=ExportSkinnedGLBResponse)
+async def export_skinned_glb(request: ExportSkinnedGLBRequest):
+    """
+    Export a rigged asset as a skinned GLB with embedded skeleton and animations.
+
+    This creates a self-contained GLB file that includes:
+    - Mesh with skinning weights (vertex deformation)
+    - Bone hierarchy as GLTF nodes
+    - Optional animation clips
+
+    The output is compatible with Godot 4.x, Unity, Unreal, and Three.js.
+    """
+    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy import select
+    from ..config import settings
+    from ..generation.models import Asset, AnimationClip
+    from ..rigging.schemas import SkeletonData, SkinningData
+
+    try:
+        # Get database session
+        engine = create_async_engine(settings.DATABASE_URL)
+        async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        async with async_session() as db:
+            # Fetch asset
+            result = await db.execute(select(Asset).where(Asset.id == request.asset_id))
+            asset = result.scalar_one_or_none()
+
+            if not asset:
+                raise HTTPException(status_code=404, detail=f"Asset not found: {request.asset_id}")
+
+            if not asset.is_rigged:
+                raise HTTPException(status_code=400, detail="Asset is not rigged")
+
+            if not asset.rigging_data:
+                raise HTTPException(status_code=400, detail="Asset has no skeleton data")
+
+            if not asset.skinning_data:
+                raise HTTPException(status_code=400, detail="Asset has no skinning data. Please re-rig the asset.")
+
+            # Parse skeleton and skinning data
+            skeleton = SkeletonData(**asset.rigging_data)
+            skinning = SkinningData(**asset.skinning_data)
+
+            # Get source mesh path - paths in DB are relative to backend dir
+            raw_path = asset.rigged_mesh_path or asset.textured_path or asset.file_path
+            source_mesh = Path(raw_path)
+
+            # Paths stored in DB already include "storage/" prefix
+            # They are relative to the backend directory, not to STORAGE_ROOT
+            # So just use them as-is (they're already correct relative paths)
+
+            if not source_mesh.exists():
+                raise HTTPException(status_code=404, detail=f"Source mesh not found: {source_mesh}")
+
+            # Prepare animations if requested
+            animations = []
+            if request.include_animations:
+                # Fetch animations
+                anim_query = select(AnimationClip).where(AnimationClip.asset_id == request.asset_id)
+                if request.animation_ids:
+                    anim_query = anim_query.where(AnimationClip.id.in_(request.animation_ids))
+
+                anim_result = await db.execute(anim_query)
+                clips = anim_result.scalars().all()
+
+                for clip in clips:
+                    if clip.keyframe_data:
+                        anim_dict = {
+                            "name": clip.name,
+                            "duration": clip.duration_seconds,
+                            "tracks": []
+                        }
+                        for track in clip.keyframe_data.get("tracks", []):
+                            track_dict = {
+                                "bone_name": track.get("bone_name"),
+                                "times": track.get("times", []),
+                            }
+                            # Handle rotations (flatten from [[x,y,z,w],...] to [[x,y,z,w],...])
+                            if track.get("rotations"):
+                                track_dict["rotations"] = track["rotations"]
+                            if track.get("positions"):
+                                track_dict["positions"] = track["positions"]
+                            anim_dict["tracks"].append(track_dict)
+                        animations.append(anim_dict)
+
+            # Determine output path
+            output_dir = Path(settings.EXPORT_DIR) / request.asset_id
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / f"{asset.name or request.asset_id}_skinned.glb"
+
+            # Export skinned GLB
+            exporter = GLTFSkinnedExporter()
+            result_path = exporter.export(
+                mesh_path=source_mesh,
+                skeleton=skeleton,
+                skinning=skinning,
+                output_path=output_path,
+                animations=animations if animations else None,
+            )
+
+            # Get file size
+            file_size = result_path.stat().st_size
+
+            return ExportSkinnedGLBResponse(
+                success=True,
+                asset_id=request.asset_id,
+                output_path=str(result_path),
+                bone_count=len(skeleton.bones),
+                animation_count=len(animations),
+                file_size_bytes=file_size,
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Skinned GLB export failed: {e}", exc_info=True)
+        return ExportSkinnedGLBResponse(
+            success=False,
+            asset_id=request.asset_id,
+            error=str(e),
+        )

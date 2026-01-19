@@ -224,20 +224,28 @@ class RiggingService:
         Returns:
             Selected processor instance
         """
+        # Check actual availability (not just config settings)
+        blender_available = await self._blender._check_blender() if rigging_settings.BLENDER_ENABLED else False
+        unirig_available = rigging_settings.UNIRIG_ENABLED  # UniRig is always available if enabled
+
         if requested == RiggingProcessor.UNIRIG:
             return self._unirig
         elif requested == RiggingProcessor.BLENDER:
+            if not blender_available:
+                logger.warning("Blender requested but not available, falling back to UniRig")
+                return self._unirig
             return self._blender
         else:
-            # Auto-select based on character type and availability
+            # Auto-select based on character type and actual availability
             if character_type == CharacterType.QUADRUPED:
-                # Blender is better for quadrupeds
-                if rigging_settings.BLENDER_ENABLED:
+                # Blender is better for quadrupeds, but fall back to UniRig if unavailable
+                if blender_available:
                     return self._blender
+                logger.info("Blender not available for quadruped, using UniRig")
                 return self._unirig
             else:
                 # UniRig is faster for humanoids
-                if rigging_settings.UNIRIG_ENABLED:
+                if unirig_available:
                     return self._unirig
                 return self._blender
 

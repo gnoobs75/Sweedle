@@ -425,6 +425,7 @@ C:\Claude\Sweedle\
 | POST | `/api/export/thumbnail` | Generate thumbnail preview |
 | POST | `/api/export/to-engine` | Export to Unity/Unreal/Godot project |
 | POST | `/api/export/with-animations` | Export GLB with embedded animations |
+| POST | `/api/export/skinned-glb` | Export skinned GLB with skeleton, weights, and animations |
 
 ### Mesh Optimization Options
 | Option | Default | Description |
@@ -587,8 +588,11 @@ See "CRITICAL: Pipeline VRAM Management" section above for full details.
 - [x] Skeleton visualization in 3D viewer
 - [x] Multi-format export (GLB + FBX)
 - [x] Auto-decimation before rigging (30k vertex target)
+- [x] Landmark-based rigging (8 key points for quadrupeds)
+- [x] Interactive landmark positioning in 3D viewer
+- [x] Skinning weights computed from landmarks
 
-### Phase 4: Animation (IN PROGRESS ~90%)
+### Phase 4: Animation (COMPLETED)
 - [x] Animation Studio UI with preset library
 - [x] Procedural animation generators (idle, walk, run, attack)
 - [x] Quadruped animations (trot, tail wag, bite)
@@ -601,6 +605,8 @@ See "CRITICAL: Pipeline VRAM Management" section above for full details.
 - [x] Export endpoint - `/api/export/with-animations`
 - [x] Bone name validation and warnings
 - [x] Bone name aliasing (Mixamo, Blender compatibility)
+- [x] Skinned GLB export with embedded skeleton, weights, and animations
+- [x] Animation preview in 3D viewer (play/pause exported skinned GLB)
 - [ ] Animation preview thumbnails (video/GIF)
 - [ ] Animation retargeting
 - [ ] Mixamo integration

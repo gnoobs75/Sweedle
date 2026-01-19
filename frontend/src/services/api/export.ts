@@ -366,6 +366,53 @@ export async function exportToEngineUnified(params: {
 }
 
 /**
+ * Export skinned GLB with embedded skeleton and animations for Godot/Unity/Unreal
+ */
+export interface ExportSkinnedGLBParams {
+  assetId: string;
+  includeAnimations?: boolean;
+  animationIds?: string[];
+}
+
+export interface ExportSkinnedGLBResult {
+  success: boolean;
+  assetId: string;
+  outputPath: string;
+  boneCount: number;
+  animationCount: number;
+  fileSizeBytes: number;
+  error?: string;
+}
+
+export async function exportSkinnedGLB(
+  params: ExportSkinnedGLBParams
+): Promise<ExportSkinnedGLBResult> {
+  const response = await apiClient.post<{
+    success: boolean;
+    asset_id: string;
+    output_path: string | null;
+    bone_count: number;
+    animation_count: number;
+    file_size_bytes: number;
+    error: string | null;
+  }>('/export/skinned-glb', {
+    asset_id: params.assetId,
+    include_animations: params.includeAnimations ?? true,
+    animation_ids: params.animationIds,
+  });
+
+  return {
+    success: response.success,
+    assetId: response.asset_id,
+    outputPath: response.output_path || '',
+    boneCount: response.bone_count,
+    animationCount: response.animation_count,
+    fileSizeBytes: response.file_size_bytes,
+    error: response.error || undefined,
+  };
+}
+
+/**
  * Regenerate thumbnail for an asset
  */
 export async function regenerateThumbnail(
