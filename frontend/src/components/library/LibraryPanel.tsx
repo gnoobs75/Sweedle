@@ -6,12 +6,14 @@ import { useEffect, useCallback, useState } from 'react';
 import { useLibraryStore } from '../../stores/libraryStore';
 import { useUIStore } from '../../stores/uiStore';
 import { listAssets, listTags } from '../../services/api/assets';
+import { regenerateThumbnail } from '../../services/api/export';
 import { SearchBar } from './SearchBar';
 import { AssetGrid } from './AssetGrid';
 import { BulkActions, SelectionToggle } from './BulkActions';
 import { TagManager } from './TagManager';
 import { AssetDetails } from './AssetDetails';
 import { Button } from '../ui/Button';
+import { Tooltip } from '../ui/Tooltip';
 import { cn } from '../../lib/utils';
 import type { Asset } from '../../types';
 
@@ -41,6 +43,43 @@ export function LibraryPanel() {
 
   const [showTags, setShowTags] = useState(false);
   const [isSelecting, setIsSelecting] = useState(false);
+  const [isRegeneratingThumbnails, setIsRegeneratingThumbnails] = useState(false);
+  const [thumbnailProgress, setThumbnailProgress] = useState({ current: 0, total: 0 });
+
+  // Regenerate thumbnails for all assets
+  const handleRegenerateAllThumbnails = useCallback(async () => {
+    if (assets.length === 0) return;
+
+    setIsRegeneratingThumbnails(true);
+    setThumbnailProgress({ current: 0, total: assets.length });
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < assets.length; i++) {
+      const asset = assets[i];
+      setThumbnailProgress({ current: i + 1, total: assets.length });
+
+      try {
+        await regenerateThumbnail(asset.id);
+        successCount++;
+      } catch {
+        failCount++;
+      }
+    }
+
+    setIsRegeneratingThumbnails(false);
+    setThumbnailProgress({ current: 0, total: 0 });
+
+    // Refresh the asset list to show new thumbnails
+    fetchAssets();
+
+    addNotification({
+      type: failCount > 0 ? 'warning' : 'success',
+      title: 'Thumbnail Regeneration Complete',
+      message: `Regenerated ${successCount} thumbnail${successCount !== 1 ? 's' : ''}${failCount > 0 ? `, ${failCount} failed` : ''}`,
+    });
+  }, [assets, fetchAssets, addNotification]);
 
   // Fetch assets
   const fetchAssets = useCallback(async () => {
@@ -136,20 +175,46 @@ export function LibraryPanel() {
                 isSelecting={isSelecting}
                 onToggle={setIsSelecting}
               />
-              <Button
-                variant={showTags ? 'primary' : 'ghost'}
-                size="sm"
-                onClick={() => setShowTags(!showTags)}
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-                </svg>
-              </Button>
-              <Button variant="ghost" size="sm" onClick={fetchAssets}>
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              </Button>
+              <Tooltip content="Manage Tags" position="bottom">
+                <Button
+                  variant={showTags ? 'primary' : 'ghost'}
+                  size="sm"
+                  onClick={() => setShowTags(!showTags)}
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                  </svg>
+                </Button>
+              </Tooltip>
+              <Tooltip content="Regenerate All Thumbnails" position="bottom">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleRegenerateAllThumbnails}
+                  disabled={isRegeneratingThumbnails || assets.length === 0}
+                >
+                  {isRegeneratingThumbnails ? (
+                    <span className="flex items-center gap-1 text-xs">
+                      <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      {thumbnailProgress.current}/{thumbnailProgress.total}
+                    </span>
+                  ) : (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                  )}
+                </Button>
+              </Tooltip>
+              <Tooltip content="Refresh" position="bottom">
+                <Button variant="ghost" size="sm" onClick={fetchAssets}>
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </Button>
+              </Tooltip>
             </div>
           </div>
 

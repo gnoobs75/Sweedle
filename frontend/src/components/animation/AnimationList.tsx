@@ -8,13 +8,31 @@ import { Spinner } from '../ui/Spinner';
 
 // Icons for different animation types
 const animationIcons: Record<string, string> = {
+  // Common animations
   idle: '🧘',
   walk: '🚶',
   run: '🏃',
   attack: '⚔️',
+  jump: '🦘',
+  die: '💀',
+  sit: '🪑',
+  lie_down: '🛏️',
+  // Humanoid-specific
+  crouch: '🧎',
+  dodge: '💨',
+  wave: '👋',
+  cheer: '🙌',
+  pickup: '🤲',
+  // Quadruped-specific
   trot: '🐕',
+  gallop: '🐎',
   tail_wag: '🐕‍🦺',
   bite: '🦷',
+  shake: '💦',
+  pounce: '🐆',
+  howl: '🐺',
+  roll_over: '🔄',
+  play_dead: '☠️',
 };
 
 interface AnimationListProps {

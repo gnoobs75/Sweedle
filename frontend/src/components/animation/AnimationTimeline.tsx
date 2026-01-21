@@ -11,7 +11,19 @@ import { useViewerStore } from '../../stores/viewerStore';
 import { exportSkinnedGLB } from '../../services/api/export';
 import { Spinner } from '../ui/Spinner';
 
-const API_BASE = 'http://localhost:8001';
+// Detect if running in Tauri
+function isTauri(): boolean {
+  return typeof window !== 'undefined' &&
+    ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+}
+
+// Get storage base URL (without /api)
+function getStorageBase(): string {
+  if (isTauri()) {
+    return 'http://localhost:8001';
+  }
+  return import.meta.env.VITE_API_BASE_URL || '';
+}
 
 export function AnimationTimeline() {
   const {
@@ -59,7 +71,7 @@ export function AnimationTimeline() {
 
       if (result.success && result.outputPath) {
         // Convert path to URL
-        const previewUrl = `${API_BASE}${result.outputPath.replace(/\\/g, '/')}?t=${Date.now()}`;
+        const previewUrl = `${getStorageBase()}${result.outputPath.replace(/\\/g, '/')}?t=${Date.now()}`;
         setSkinnedPreviewUrl(previewUrl);
         setIsSkinnedPreview(true);
         console.log('Skinned preview enabled:', previewUrl);

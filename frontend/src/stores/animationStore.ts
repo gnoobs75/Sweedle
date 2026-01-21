@@ -5,13 +5,31 @@
 import { create } from 'zustand';
 
 export type AnimationType =
+  // Common animations (both humanoid and quadruped)
   | 'idle'
   | 'walk'
   | 'run'
   | 'attack'
+  | 'jump'
+  | 'die'
+  | 'sit'
+  | 'lie_down'
+  // Humanoid-specific
+  | 'crouch'
+  | 'dodge'
+  | 'wave'
+  | 'cheer'
+  | 'pickup'
+  // Quadruped-specific
   | 'trot'
+  | 'gallop'
   | 'tail_wag'
-  | 'bite';
+  | 'bite'
+  | 'shake'
+  | 'pounce'
+  | 'howl'
+  | 'roll_over'
+  | 'play_dead';
 
 export type LoopMode = 'loop' | 'once' | 'pingpong';
 

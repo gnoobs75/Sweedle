@@ -2,12 +2,14 @@
  * ViewerToolbar Component - Controls for 3D viewer
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useViewerStore } from '../../stores/viewerStore';
 import { useRiggingStore } from '../../stores/riggingStore';
+import { useAnimationStore, type AnimationClip } from '../../stores/animationStore';
 import { useLibraryStore } from '../../stores/libraryStore';
 import { useUIStore } from '../../stores/uiStore';
 import { addTextureToAsset } from '../../services/api/generation';
+import { getAssetAnimations } from '../../services/api/animation';
 import { Button } from '../ui/Button';
 import { Slider } from '../ui/Slider';
 import { Select } from '../ui/Select';
@@ -54,11 +56,32 @@ export function ViewerToolbar({ className }: ViewerToolbarProps) {
   } = useViewerStore();
 
   const { skeletonData, showSkeleton, setShowSkeleton, selectedBone } = useRiggingStore();
+  const { clips, setClips, activeClipId, setActiveClip, isPlaying, play, pause } = useAnimationStore();
   const { assets, updateAsset } = useLibraryStore();
   const { openModal, addNotification } = useUIStore();
 
   const [showSettings, setShowSettings] = useState(false);
   const [isAddingTexture, setIsAddingTexture] = useState(false);
+  const [showAnimationDropdown, setShowAnimationDropdown] = useState(false);
+
+  // Load animations when asset changes and has skeleton
+  useEffect(() => {
+    if (currentAssetId && skeletonData) {
+      loadAnimations(currentAssetId);
+    } else {
+      setClips([]);
+    }
+  }, [currentAssetId, skeletonData]);
+
+  async function loadAnimations(assetId: string) {
+    try {
+      const fetchedClips = await getAssetAnimations(assetId);
+      setClips(fetchedClips);
+    } catch {
+      // No animations available
+      setClips([]);
+    }
+  }
 
   // Get current asset from library
   const currentAsset = currentAssetId ? assets.find(a => a.id === currentAssetId) : null;
@@ -215,6 +238,95 @@ export function ViewerToolbar({ className }: ViewerToolbarProps) {
               <span className="ml-1 text-xs">Rig</span>
             </Button>
           </Tooltip>
+        )}
+
+        {/* Animation dropdown - show when model has animations */}
+        {clips.length > 0 && (
+          <>
+            <div className="w-px h-6 bg-border mx-2" />
+            <div className="relative">
+              <Tooltip content="Select Animation" position="bottom">
+                <Button
+                  variant={activeClipId ? 'primary' : 'ghost'}
+                  size="sm"
+                  onClick={() => setShowAnimationDropdown(!showAnimationDropdown)}
+                  className="flex items-center gap-1"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="text-xs truncate max-w-20">
+                    {activeClipId ? clips.find(c => c.id === activeClipId)?.name || 'Animation' : 'Animations'}
+                  </span>
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </Button>
+              </Tooltip>
+
+              {/* Animation dropdown menu */}
+              {showAnimationDropdown && (
+                <div className="absolute left-0 top-full mt-1 w-48 bg-surface border border-border rounded-lg shadow-xl z-50 py-1">
+                  <div className="px-2 py-1.5 text-xs text-text-muted border-b border-border">
+                    {clips.length} animation{clips.length !== 1 ? 's' : ''} available
+                  </div>
+                  {clips.map((clip) => (
+                    <button
+                      key={clip.id}
+                      onClick={() => {
+                        setActiveClip(clip.id);
+                        setShowAnimationDropdown(false);
+                      }}
+                      className={cn(
+                        'w-full px-3 py-2 text-left text-sm flex items-center justify-between',
+                        'hover:bg-surface-light transition-colors',
+                        activeClipId === clip.id && 'bg-primary/10 text-primary'
+                      )}
+                    >
+                      <span className="truncate">{clip.name}</span>
+                      <span className="text-xs text-text-muted">{clip.duration.toFixed(1)}s</span>
+                    </button>
+                  ))}
+                  {activeClipId && (
+                    <>
+                      <div className="border-t border-border my-1" />
+                      <button
+                        onClick={() => {
+                          setActiveClip(null);
+                          setShowAnimationDropdown(false);
+                        }}
+                        className="w-full px-3 py-2 text-left text-sm text-text-muted hover:bg-surface-light transition-colors"
+                      >
+                        Clear selection
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Play/Pause button when animation is selected */}
+            {activeClipId && (
+              <Tooltip content={isPlaying ? 'Pause Animation' : 'Play Animation'} position="bottom">
+                <Button
+                  variant={isPlaying ? 'primary' : 'ghost'}
+                  size="sm"
+                  onClick={() => isPlaying ? pause() : play()}
+                >
+                  {isPlaying ? (
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                  )}
+                </Button>
+              </Tooltip>
+            )}
+          </>
         )}
 
         <div className="w-px h-6 bg-border mx-2" />
