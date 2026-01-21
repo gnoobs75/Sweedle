@@ -10,14 +10,33 @@ from pydantic import BaseModel, Field
 
 class AnimationType(str, Enum):
     """Available animation types."""
+    # Common animations (both humanoid and quadruped)
     IDLE = "idle"
     WALK = "walk"
     RUN = "run"
     ATTACK = "attack"
+    JUMP = "jump"
+    DIE = "die"
+    SIT = "sit"
+    LIE_DOWN = "lie_down"
+
+    # Humanoid-specific
+    CROUCH = "crouch"
+    DODGE = "dodge"
+    WAVE = "wave"
+    CHEER = "cheer"
+    PICKUP = "pickup"
+
     # Quadruped-specific
     TROT = "trot"
+    GALLOP = "gallop"
     TAIL_WAG = "tail_wag"
     BITE = "bite"
+    SHAKE = "shake"
+    POUNCE = "pounce"
+    HOWL = "howl"
+    ROLL_OVER = "roll_over"
+    PLAY_DEAD = "play_dead"
 
 
 class LoopMode(str, Enum):

@@ -18,14 +18,33 @@ from .schemas import (
     LoopMode,
 )
 from .generators import (
+    # Humanoid generators
     IdleGenerator,
     WalkGenerator,
     RunGenerator,
     AttackGenerator,
+    DieGenerator,
+    SitGenerator,
+    CrouchGenerator,
+    JumpGenerator,
+    DodgeGenerator,
+    WaveGenerator,
+    CheerGenerator,
+    PickupGenerator,
+    # Quadruped generators
     QuadrupedIdleGenerator,
     TrotGenerator,
     TailWagGenerator,
     BiteGenerator,
+    GallopGenerator,
+    QuadrupedSitGenerator,
+    QuadrupedLieDownGenerator,
+    QuadrupedJumpGenerator,
+    ShakeGenerator,
+    PounceGenerator,
+    HowlGenerator,
+    RollOverGenerator,
+    PlayDeadGenerator,
 )
 from .bone_validator import validate_skeleton_for_animation, ValidationResult
 from ..generation.models import Asset, AnimationClip
@@ -36,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 # Pre-defined animation presets
 ANIMATION_PRESETS: dict[str, AnimationPreset] = {
-    # Humanoid presets
+    # ==================== HUMANOID PRESETS ====================
     "humanoid_idle": AnimationPreset(
         id="humanoid_idle",
         name="Idle (Breathing)",
@@ -67,6 +86,16 @@ ANIMATION_PRESETS: dict[str, AnimationPreset] = {
         duration=0.6,
         tags=["locomotion", "loop"],
     ),
+    "humanoid_jump": AnimationPreset(
+        id="humanoid_jump",
+        name="Jump",
+        description="Jump with crouch, leap, and land phases",
+        animation_type=AnimationType.JUMP,
+        character_type="humanoid",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=0.8,
+        tags=["movement", "once"],
+    ),
     "humanoid_attack": AnimationPreset(
         id="humanoid_attack",
         name="Attack (Slash)",
@@ -77,7 +106,78 @@ ANIMATION_PRESETS: dict[str, AnimationPreset] = {
         duration=0.8,
         tags=["combat", "once"],
     ),
-    # Quadruped presets
+    "humanoid_die": AnimationPreset(
+        id="humanoid_die",
+        name="Die",
+        description="Death collapse animation",
+        animation_type=AnimationType.DIE,
+        character_type="humanoid",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=1.5,
+        tags=["combat", "once"],
+    ),
+    "humanoid_sit": AnimationPreset(
+        id="humanoid_sit",
+        name="Sit Down",
+        description="Transition to sitting position",
+        animation_type=AnimationType.SIT,
+        character_type="humanoid",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=1.2,
+        tags=["idle", "once"],
+    ),
+    "humanoid_crouch": AnimationPreset(
+        id="humanoid_crouch",
+        name="Crouch",
+        description="Crouching/sneaking stance",
+        animation_type=AnimationType.CROUCH,
+        character_type="humanoid",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=0.6,
+        tags=["movement", "once"],
+    ),
+    "humanoid_dodge": AnimationPreset(
+        id="humanoid_dodge",
+        name="Dodge Roll",
+        description="Side dodge roll animation",
+        animation_type=AnimationType.DODGE,
+        character_type="humanoid",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=0.8,
+        tags=["combat", "once"],
+    ),
+    "humanoid_wave": AnimationPreset(
+        id="humanoid_wave",
+        name="Wave",
+        description="Friendly waving gesture",
+        animation_type=AnimationType.WAVE,
+        character_type="humanoid",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=2.0,
+        tags=["social", "once"],
+    ),
+    "humanoid_cheer": AnimationPreset(
+        id="humanoid_cheer",
+        name="Cheer",
+        description="Celebration with arms raised",
+        animation_type=AnimationType.CHEER,
+        character_type="humanoid",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=2.0,
+        tags=["social", "once"],
+    ),
+    "humanoid_pickup": AnimationPreset(
+        id="humanoid_pickup",
+        name="Pick Up",
+        description="Bend down to pick something up",
+        animation_type=AnimationType.PICKUP,
+        character_type="humanoid",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=1.5,
+        tags=["interaction", "once"],
+    ),
+
+    # ==================== QUADRUPED PRESETS ====================
     "quadruped_idle": AnimationPreset(
         id="quadruped_idle",
         name="Idle (Breathing)",
@@ -98,6 +198,46 @@ ANIMATION_PRESETS: dict[str, AnimationPreset] = {
         duration=0.8,
         tags=["locomotion", "loop"],
     ),
+    "quadruped_gallop": AnimationPreset(
+        id="quadruped_gallop",
+        name="Gallop (Run)",
+        description="Fast galloping run animation",
+        animation_type=AnimationType.GALLOP,
+        character_type="quadruped",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=0.5,
+        tags=["locomotion", "loop"],
+    ),
+    "quadruped_jump": AnimationPreset(
+        id="quadruped_jump",
+        name="Jump",
+        description="Leap with crouch and land phases",
+        animation_type=AnimationType.JUMP,
+        character_type="quadruped",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=0.8,
+        tags=["movement", "once"],
+    ),
+    "quadruped_sit": AnimationPreset(
+        id="quadruped_sit",
+        name="Sit",
+        description="Transition to sitting position",
+        animation_type=AnimationType.SIT,
+        character_type="quadruped",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=1.0,
+        tags=["idle", "once"],
+    ),
+    "quadruped_lie_down": AnimationPreset(
+        id="quadruped_lie_down",
+        name="Lie Down",
+        description="Transition to lying down position",
+        animation_type=AnimationType.LIE_DOWN,
+        character_type="quadruped",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=1.5,
+        tags=["idle", "once"],
+    ),
     "quadruped_tail_wag": AnimationPreset(
         id="quadruped_tail_wag",
         name="Tail Wag",
@@ -107,6 +247,26 @@ ANIMATION_PRESETS: dict[str, AnimationPreset] = {
         default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
         duration=1.0,
         tags=["behavior", "loop"],
+    ),
+    "quadruped_shake": AnimationPreset(
+        id="quadruped_shake",
+        name="Shake",
+        description="Full body shake (shaking off water)",
+        animation_type=AnimationType.SHAKE,
+        character_type="quadruped",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=1.2,
+        tags=["behavior", "once"],
+    ),
+    "quadruped_howl": AnimationPreset(
+        id="quadruped_howl",
+        name="Howl / Bark",
+        description="Head up howling or barking animation",
+        animation_type=AnimationType.HOWL,
+        character_type="quadruped",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=2.0,
+        tags=["behavior", "once"],
     ),
     "quadruped_bite": AnimationPreset(
         id="quadruped_bite",
@@ -118,21 +278,69 @@ ANIMATION_PRESETS: dict[str, AnimationPreset] = {
         duration=0.6,
         tags=["combat", "once"],
     ),
+    "quadruped_pounce": AnimationPreset(
+        id="quadruped_pounce",
+        name="Pounce",
+        description="Crouch and spring forward attack",
+        animation_type=AnimationType.POUNCE,
+        character_type="quadruped",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=0.7,
+        tags=["combat", "once"],
+    ),
+    "quadruped_roll_over": AnimationPreset(
+        id="quadruped_roll_over",
+        name="Roll Over",
+        description="Roll onto back with paws in air",
+        animation_type=AnimationType.ROLL_OVER,
+        character_type="quadruped",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=2.0,
+        tags=["behavior", "once"],
+    ),
+    "quadruped_play_dead": AnimationPreset(
+        id="quadruped_play_dead",
+        name="Play Dead / Die",
+        description="Collapse and lie still animation",
+        animation_type=AnimationType.PLAY_DEAD,
+        character_type="quadruped",
+        default_parameters=AnimationParameters(speed=1.0, intensity=1.0),
+        duration=1.5,
+        tags=["combat", "once"],
+    ),
 }
 
 
 # Generator mapping
 GENERATORS = {
-    # Humanoid
+    # ==================== HUMANOID ====================
     ("humanoid", AnimationType.IDLE): IdleGenerator,
     ("humanoid", AnimationType.WALK): WalkGenerator,
     ("humanoid", AnimationType.RUN): RunGenerator,
+    ("humanoid", AnimationType.JUMP): JumpGenerator,
     ("humanoid", AnimationType.ATTACK): AttackGenerator,
-    # Quadruped
+    ("humanoid", AnimationType.DIE): DieGenerator,
+    ("humanoid", AnimationType.SIT): SitGenerator,
+    ("humanoid", AnimationType.CROUCH): CrouchGenerator,
+    ("humanoid", AnimationType.DODGE): DodgeGenerator,
+    ("humanoid", AnimationType.WAVE): WaveGenerator,
+    ("humanoid", AnimationType.CHEER): CheerGenerator,
+    ("humanoid", AnimationType.PICKUP): PickupGenerator,
+
+    # ==================== QUADRUPED ====================
     ("quadruped", AnimationType.IDLE): QuadrupedIdleGenerator,
     ("quadruped", AnimationType.TROT): TrotGenerator,
+    ("quadruped", AnimationType.GALLOP): GallopGenerator,
+    ("quadruped", AnimationType.JUMP): QuadrupedJumpGenerator,
+    ("quadruped", AnimationType.SIT): QuadrupedSitGenerator,
+    ("quadruped", AnimationType.LIE_DOWN): QuadrupedLieDownGenerator,
     ("quadruped", AnimationType.TAIL_WAG): TailWagGenerator,
+    ("quadruped", AnimationType.SHAKE): ShakeGenerator,
+    ("quadruped", AnimationType.HOWL): HowlGenerator,
     ("quadruped", AnimationType.BITE): BiteGenerator,
+    ("quadruped", AnimationType.POUNCE): PounceGenerator,
+    ("quadruped", AnimationType.ROLL_OVER): RollOverGenerator,
+    ("quadruped", AnimationType.PLAY_DEAD): PlayDeadGenerator,
 }
 
 

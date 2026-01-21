@@ -182,6 +182,7 @@ class MeshOptimizer:
         merge_duplicates: bool = True,
         fix_normals: bool = True,
         center_pivot: bool = False,
+        ground_origin: bool = False,
         normalize_scale: bool = False,
         target_scale: float = 1.0,
     ) -> OptimizationResult:
@@ -194,7 +195,8 @@ class MeshOptimizer:
             remove_degenerates: Remove degenerate faces
             merge_duplicates: Merge duplicate vertices
             fix_normals: Ensure consistent normals
-            center_pivot: Center the mesh at origin
+            center_pivot: Center the mesh at origin (XZ plane)
+            ground_origin: Move mesh so bottom is at Y=0 (fixes models spawning half in ground)
             normalize_scale: Scale to target size
             target_scale: Target size for normalization
 
@@ -219,6 +221,7 @@ class MeshOptimizer:
                                 merge_duplicates,
                                 fix_normals,
                                 center_pivot,
+                                ground_origin,
                                 normalize_scale,
                                 target_scale,
                                 operations,
@@ -230,6 +233,7 @@ class MeshOptimizer:
                         merge_duplicates,
                         fix_normals,
                         center_pivot,
+                        ground_origin,
                         normalize_scale,
                         target_scale,
                         operations,
@@ -268,6 +272,7 @@ class MeshOptimizer:
         merge_duplicates: bool,
         fix_normals: bool,
         center_pivot: bool,
+        ground_origin: bool,
         normalize_scale: bool,
         target_scale: float,
         operations: list[str],
@@ -294,6 +299,14 @@ class MeshOptimizer:
         if center_pivot:
             mesh.vertices -= mesh.centroid
             operations.append("Centered pivot")
+
+        if ground_origin:
+            # Move mesh so the bottom (minimum Y) is at Y=0
+            # This fixes models appearing half-sunk in the ground in game engines
+            min_y = mesh.vertices[:, 1].min()
+            if abs(min_y) > 1e-6:  # Only translate if not already at origin
+                mesh.vertices[:, 1] -= min_y
+                operations.append(f"Grounded origin (moved Y by {-min_y:.4f})")
 
         if normalize_scale:
             scale = mesh.scale

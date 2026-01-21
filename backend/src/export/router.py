@@ -80,6 +80,10 @@ class OptimizeMeshRequest(BaseModel):
     merge_duplicates: bool = True
     fix_normals: bool = True
     center_pivot: bool = False
+    ground_origin: bool = Field(
+        default=True,
+        description="Move mesh so bottom is at Y=0 (fixes models spawning half in ground)"
+    )
 
 
 class OptimizeMeshResponse(BaseModel):
@@ -154,6 +158,10 @@ class ExportSkinnedGLBRequest(BaseModel):
     animation_ids: Optional[list[str]] = Field(
         default=None,
         description="Specific animation IDs to include (None = all)"
+    )
+    ground_origin: bool = Field(
+        default=True,
+        description="Move mesh so bottom is at Y=0 (fixes models spawning half in ground)"
     )
 
 
@@ -278,6 +286,7 @@ async def optimize_mesh(request: OptimizeMeshRequest):
             merge_duplicates=request.merge_duplicates,
             fix_normals=request.fix_normals,
             center_pivot=request.center_pivot,
+            ground_origin=request.ground_origin,
         )
 
         return OptimizeMeshResponse(
@@ -523,6 +532,7 @@ async def export_skinned_glb(request: ExportSkinnedGLBRequest):
                 skinning=skinning,
                 output_path=output_path,
                 animations=animations if animations else None,
+                ground_origin=request.ground_origin,
             )
 
             # Get file size

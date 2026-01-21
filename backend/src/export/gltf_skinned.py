@@ -74,6 +74,7 @@ class GLTFSkinnedExporter:
         skinning: SkinningData,
         output_path: Path,
         animations: Optional[list[dict]] = None,
+        ground_origin: bool = True,
     ) -> Path:
         """
         Export a rigged mesh as a skinned GLB file, preserving materials/textures.
@@ -84,6 +85,7 @@ class GLTFSkinnedExporter:
             skinning: Skinning weights per vertex
             output_path: Output GLB path
             animations: Optional list of animation data dicts
+            ground_origin: Move mesh so bottom is at Y=0 (fixes models spawning half in ground)
 
         Returns:
             Path to exported GLB
@@ -98,6 +100,11 @@ class GLTFSkinnedExporter:
         original_blob = self.gltf.binary_blob() or b''
         self.original_buffer_length = len(original_blob)
         self.additional_data = bytearray(original_blob)
+
+        # Apply ground_origin transformation if enabled
+        y_offset = 0.0
+        if ground_origin:
+            y_offset = self._apply_ground_origin(skeleton)
 
         logger.info(f"Loaded source GLTF with {len(self.gltf.nodes)} nodes, {len(self.gltf.meshes)} meshes, {len(self.gltf.materials or [])} materials")
 
@@ -165,6 +172,98 @@ class GLTFSkinnedExporter:
 
         pos_accessor = self.gltf.accessors[prim.attributes.POSITION]
         return pos_accessor.count
+
+    def _apply_ground_origin(self, skeleton: SkeletonData) -> float:
+        """
+        Move mesh vertices and skeleton so the bottom of the mesh is at Y=0.
+
+        This fixes models appearing half-sunk in the ground in game engines.
+
+        Args:
+            skeleton: Skeleton data to adjust (bone positions will be modified)
+
+        Returns:
+            The Y offset that was applied (negative means mesh was below origin)
+        """
+        if not self.gltf.meshes:
+            return 0.0
+
+        # Find minimum Y across all mesh primitives
+        min_y = float('inf')
+
+        for mesh in self.gltf.meshes:
+            for prim in mesh.primitives:
+                if prim.attributes.POSITION is None:
+                    continue
+
+                pos_accessor = self.gltf.accessors[prim.attributes.POSITION]
+                pos_view = self.gltf.bufferViews[pos_accessor.bufferView]
+
+                # Read vertex positions from buffer
+                start = pos_view.byteOffset + (pos_accessor.byteOffset or 0)
+                vertex_count = pos_accessor.count
+
+                # VEC3 of floats = 12 bytes per vertex
+                pos_data = np.frombuffer(
+                    bytes(self.additional_data[start:start + vertex_count * 12]),
+                    dtype=np.float32
+                ).reshape(-1, 3)
+
+                primitive_min_y = pos_data[:, 1].min()
+                min_y = min(min_y, primitive_min_y)
+
+        if min_y == float('inf') or abs(min_y) < 1e-6:
+            logger.info("Mesh already grounded or no vertices found")
+            return 0.0
+
+        y_offset = -min_y
+        logger.info(f"Grounding mesh: min_y={min_y:.4f}, applying offset={y_offset:.4f}")
+
+        # Apply offset to all mesh vertex positions
+        for mesh in self.gltf.meshes:
+            for prim in mesh.primitives:
+                if prim.attributes.POSITION is None:
+                    continue
+
+                pos_accessor = self.gltf.accessors[prim.attributes.POSITION]
+                pos_view = self.gltf.bufferViews[pos_accessor.bufferView]
+
+                start = pos_view.byteOffset + (pos_accessor.byteOffset or 0)
+                vertex_count = pos_accessor.count
+
+                # Read, modify, write back
+                pos_data = np.frombuffer(
+                    bytes(self.additional_data[start:start + vertex_count * 12]),
+                    dtype=np.float32
+                ).reshape(-1, 3).copy()
+
+                pos_data[:, 1] += y_offset
+
+                # Write modified data back to buffer
+                self.additional_data[start:start + vertex_count * 12] = pos_data.tobytes()
+
+                # Update accessor min/max if present
+                if pos_accessor.min is not None and len(pos_accessor.min) >= 2:
+                    pos_accessor.min[1] += y_offset
+                if pos_accessor.max is not None and len(pos_accessor.max) >= 2:
+                    pos_accessor.max[1] += y_offset
+
+        # Adjust skeleton bone positions by the same offset
+        for bone in skeleton.bones:
+            bone.head_position = (
+                bone.head_position[0],
+                bone.head_position[1] + y_offset,
+                bone.head_position[2]
+            )
+            if bone.tail_position:
+                bone.tail_position = (
+                    bone.tail_position[0],
+                    bone.tail_position[1] + y_offset,
+                    bone.tail_position[2]
+                )
+
+        logger.info(f"Grounded {len(skeleton.bones)} bone positions")
+        return y_offset
 
     def _find_mesh_node(self) -> int:
         """Find the node containing the mesh."""
@@ -536,6 +635,7 @@ def export_skinned_glb(
     skinning: SkinningData,
     output_path: Path,
     animations: Optional[list[dict]] = None,
+    ground_origin: bool = True,
 ) -> Path:
     """
     Export a skinned GLB file, preserving materials and textures.
@@ -546,9 +646,10 @@ def export_skinned_glb(
         skinning: Skinning weights
         output_path: Output path
         animations: Optional animation data
+        ground_origin: Move mesh so bottom is at Y=0 (default: True)
 
     Returns:
         Path to exported GLB
     """
     exporter = GLTFSkinnedExporter()
-    return exporter.export(mesh_path, skeleton, skinning, output_path, animations)
+    return exporter.export(mesh_path, skeleton, skinning, output_path, animations, ground_origin)
