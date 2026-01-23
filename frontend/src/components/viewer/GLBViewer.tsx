@@ -86,6 +86,11 @@ function Model({
     currentTime,
     setCurrentTime,
     setIsPlaying,
+    // Embedded animation state
+    embeddedAnimations: storeEmbeddedAnimations,
+    activeEmbeddedName,
+    setEmbeddedAnimations,
+    clearEmbeddedAnimations,
   } = useAnimationStore();
 
   // Track if we're in a seek operation
@@ -314,30 +319,40 @@ function Model({
 
   // Load embedded animations from skinned GLB (when in skinned preview mode)
   useEffect(() => {
-    if (!mixerRef.current || !isSkinnedPreview || !embeddedAnimations?.length) return;
+    if (!mixerRef.current || !isSkinnedPreview || !embeddedAnimations?.length) {
+      // Clear embedded animations when not in skinned preview
+      if (!isSkinnedPreview) {
+        embeddedActionsRef.current.forEach((action) => action.stop());
+        embeddedActionsRef.current.clear();
+        clearEmbeddedAnimations();
+      }
+      return;
+    }
 
     console.log(`Loading ${embeddedAnimations.length} embedded animations from skinned GLB`);
     embeddedActionsRef.current.clear();
 
+    // Build list for store
+    const animList: { name: string; duration: number; index: number }[] = [];
+
     embeddedAnimations.forEach((animClip, index) => {
       const action = mixerRef.current!.clipAction(animClip);
       action.setLoop(THREE.LoopRepeat, Infinity);
+      action.clampWhenFinished = false;
 
       // Use clip name as key, or index if no name
-      const key = animClip.name || `embedded_${index}`;
+      const key = animClip.name || `Animation_${index}`;
       embeddedActionsRef.current.set(key, action);
+      animList.push({ name: key, duration: animClip.duration, index });
       console.log(`Loaded embedded animation: ${key} (${animClip.duration.toFixed(2)}s)`);
     });
 
-    // Auto-play first embedded animation if we have any
-    if (embeddedAnimations.length > 0 && embeddedActionsRef.current.size > 0) {
-      const firstAction = embeddedActionsRef.current.values().next().value;
-      if (firstAction) {
-        firstAction.reset().play();
-        console.log('Auto-playing first embedded animation');
-      }
-    }
-  }, [embeddedAnimations, isSkinnedPreview]);
+    // Register animations in store (this will auto-select the first one)
+    setEmbeddedAnimations(animList);
+
+    // DON'T auto-play - let user click play
+    console.log('Embedded animations loaded. Ready for playback.');
+  }, [embeddedAnimations, isSkinnedPreview, setEmbeddedAnimations, clearEmbeddedAnimations]);
 
   // Load animation clips into mixer
   useEffect(() => {
@@ -452,26 +467,45 @@ function Model({
   }, [activeClipId, isPlaying, isSkinnedPreview]);
 
   // Handle play/pause/stop for embedded animations (skinned preview mode)
+  // Only plays the SELECTED embedded animation, not all of them
   useEffect(() => {
     if (!mixerRef.current || !isSkinnedPreview || embeddedActionsRef.current.size === 0) return;
+    if (!activeEmbeddedName) return;
 
-    // Control all embedded animations based on play state
-    embeddedActionsRef.current.forEach((action) => {
-      if (isPlaying) {
-        if (action.paused) {
-          action.paused = false;
-        } else if (!action.isRunning()) {
-          action.reset().play();
-        }
-      } else {
-        action.paused = true;
+    const selectedAction = embeddedActionsRef.current.get(activeEmbeddedName);
+    if (!selectedAction) {
+      console.warn(`Embedded animation '${activeEmbeddedName}' not found`);
+      return;
+    }
+
+    // Stop ALL other embedded animations
+    embeddedActionsRef.current.forEach((action, name) => {
+      if (name !== activeEmbeddedName && action.isRunning()) {
+        action.stop();
+        console.log(`Stopped embedded animation: ${name}`);
       }
     });
-  }, [isPlaying, isSkinnedPreview]);
 
-  // Handle seek (when currentTime changes while paused)
+    // Control the selected animation
+    if (isPlaying) {
+      if (!selectedAction.isRunning()) {
+        selectedAction.reset().play();
+        console.log(`Playing embedded animation: ${activeEmbeddedName}`);
+      } else if (selectedAction.paused) {
+        selectedAction.paused = false;
+        console.log(`Resumed embedded animation: ${activeEmbeddedName}`);
+      }
+    } else {
+      if (selectedAction.isRunning()) {
+        selectedAction.paused = true;
+        console.log(`Paused embedded animation: ${activeEmbeddedName}`);
+      }
+    }
+  }, [isPlaying, isSkinnedPreview, activeEmbeddedName]);
+
+  // Handle seek for JSON animations (when currentTime changes while paused)
   useEffect(() => {
-    if (!mixerRef.current || !activeClipId || isPlaying) return;
+    if (!mixerRef.current || isSkinnedPreview || !activeClipId || isPlaying) return;
 
     const action = actionsRef.current.get(activeClipId);
     if (!action) return;
@@ -486,7 +520,26 @@ function Model({
       action.paused = true;
     }
     lastTimeRef.current = currentTime;
-  }, [currentTime, activeClipId, isPlaying]);
+  }, [currentTime, activeClipId, isPlaying, isSkinnedPreview]);
+
+  // Handle seek for embedded animations (when currentTime changes while paused)
+  useEffect(() => {
+    if (!mixerRef.current || !isSkinnedPreview || !activeEmbeddedName || isPlaying) return;
+
+    const action = embeddedActionsRef.current.get(activeEmbeddedName);
+    if (!action) return;
+
+    // Detect if this is a user-initiated seek (time changed significantly)
+    const timeDiff = Math.abs(currentTime - lastTimeRef.current);
+    if (timeDiff > 0.05) {
+      // User seeked - update action time
+      action.paused = false;
+      action.time = currentTime;
+      mixerRef.current.update(0); // Force update to show the new frame
+      action.paused = true;
+    }
+    lastTimeRef.current = currentTime;
+  }, [currentTime, activeEmbeddedName, isPlaying, isSkinnedPreview]);
 
   // Update mixer and current time on each frame
   useFrame((_, delta) => {
@@ -499,15 +552,15 @@ function Model({
     if (mixerRef.current && isPlaying) {
       mixerRef.current.update(delta);
 
-      // Update current time in store
-      if (isSkinnedPreview) {
-        // Get time from first embedded action
-        const firstAction = embeddedActionsRef.current.values().next().value;
-        if (firstAction) {
-          setCurrentTime(firstAction.time);
+      // Update current time in store from the active animation
+      if (isSkinnedPreview && activeEmbeddedName) {
+        // Get time from SELECTED embedded action
+        const selectedAction = embeddedActionsRef.current.get(activeEmbeddedName);
+        if (selectedAction) {
+          setCurrentTime(selectedAction.time);
         }
-      } else {
-        const activeAction = activeClipId ? actionsRef.current.get(activeClipId) : null;
+      } else if (activeClipId) {
+        const activeAction = actionsRef.current.get(activeClipId);
         if (activeAction) {
           setCurrentTime(activeAction.time);
         }

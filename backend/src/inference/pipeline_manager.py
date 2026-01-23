@@ -232,7 +232,10 @@ class PipelineManager:
         import torch
 
         vram_before = self._get_vram_info()["used_gb"]
-        logger.info(f"Full unload starting. VRAM before: {vram_before:.2f}GB")
+        logger.info(f"===== FULL UNLOAD STARTING =====")
+        logger.info(f"VRAM before unload: {vram_before:.2f}GB")
+        logger.info(f"Shape pipeline loaded: {self._shape_pipeline is not None}")
+        logger.info(f"Texture pipeline loaded: {self._texture_pipeline is not None}")
 
         await self._broadcast_status("Unloading pipelines...", 0.1)
         if progress_callback:
@@ -241,87 +244,120 @@ class PipelineManager:
         # Unload shape pipeline with deep cleanup
         if self._shape_pipeline is not None:
             self._shape_state = PipelineState.UNLOADING
+            logger.info("--- Unloading SHAPE pipeline ---")
             await self._broadcast_status("Unloading shape model...", 0.15)
 
             try:
                 # Deep cleanup: Move components to CPU first before deletion
                 # This ensures GPU tensors are properly released
+                logger.info("Running deep cleanup on shape pipeline...")
                 self._deep_cleanup_pipeline(self._shape_pipeline, "shape")
+                vram_after_cleanup = self._get_vram_info()["used_gb"]
+                logger.info(f"Shape deep cleanup done. VRAM now: {vram_after_cleanup:.2f}GB")
             except Exception as e:
                 logger.warning(f"Error during shape pipeline cleanup: {e}")
 
             try:
                 # Try to free model hooks if available
                 if hasattr(self._shape_pipeline, 'maybe_free_model_hooks'):
+                    logger.info("Freeing shape model hooks...")
                     self._shape_pipeline.maybe_free_model_hooks()
+                    logger.info("Shape model hooks freed")
             except Exception as e:
                 logger.warning(f"Error freeing shape model hooks: {e}")
 
             # Delete the pipeline
+            logger.info("Deleting shape pipeline reference...")
             del self._shape_pipeline
             self._shape_pipeline = None
             self._shape_state = PipelineState.UNLOADED
-            logger.info("Shape pipeline deleted")
+            logger.info("Shape pipeline deleted and set to None")
 
         # Unload texture pipeline with deep cleanup
         if self._texture_pipeline is not None:
             self._texture_state = PipelineState.UNLOADING
+            logger.info("--- Unloading TEXTURE pipeline ---")
             await self._broadcast_status("Unloading texture model...", 0.2)
 
             try:
                 # Deep cleanup for texture pipeline
+                logger.info("Running deep cleanup on texture pipeline...")
                 self._deep_cleanup_pipeline(self._texture_pipeline, "texture")
+                vram_after_cleanup = self._get_vram_info()["used_gb"]
+                logger.info(f"Texture deep cleanup done. VRAM now: {vram_after_cleanup:.2f}GB")
             except Exception as e:
                 logger.warning(f"Error during texture pipeline cleanup: {e}")
 
             try:
                 if hasattr(self._texture_pipeline, 'maybe_free_model_hooks'):
+                    logger.info("Freeing texture model hooks...")
                     self._texture_pipeline.maybe_free_model_hooks()
+                    logger.info("Texture model hooks freed")
             except Exception as e:
                 logger.warning(f"Error freeing texture model hooks: {e}")
 
+            logger.info("Deleting texture pipeline reference...")
             del self._texture_pipeline
             self._texture_pipeline = None
             self._texture_state = PipelineState.UNLOADED
-            logger.info("Texture pipeline deleted")
+            logger.info("Texture pipeline deleted and set to None")
 
         await self._broadcast_status("Clearing GPU memory...", 0.25)
         if progress_callback:
             progress_callback(0.25, "Clearing GPU memory...")
 
         # Aggressive garbage collection (run before CUDA cleanup)
+        logger.info("--- Running garbage collection (3 passes) ---")
         gc.collect()
+        logger.info("GC pass 1 complete")
         gc.collect()
+        logger.info("GC pass 2 complete")
         gc.collect()
+        logger.info("GC pass 3 complete")
 
         # Clear CUDA cache with full synchronization
         if torch.cuda.is_available():
+            logger.info("--- Clearing CUDA cache ---")
             # Sync to ensure all pending CUDA operations complete
+            logger.info("Synchronizing CUDA (waiting for pending ops)...")
             torch.cuda.synchronize()
+            logger.info("CUDA synchronized")
 
             # Empty the cache
+            logger.info("Emptying CUDA cache...")
             torch.cuda.empty_cache()
+            vram_after_cache = self._get_vram_info()["used_gb"]
+            logger.info(f"CUDA cache emptied. VRAM now: {vram_after_cache:.2f}GB")
 
             # IPC collect if available (helps with multiprocess scenarios)
             if hasattr(torch.cuda, 'ipc_collect'):
+                logger.info("Running CUDA IPC collect...")
                 torch.cuda.ipc_collect()
+                logger.info("CUDA IPC collect done")
 
             # Reset memory stats for clean tracking
             try:
+                logger.info("Resetting CUDA peak memory stats...")
                 torch.cuda.reset_peak_memory_stats()
+                logger.info("Peak memory stats reset")
             except Exception:
                 pass
 
             # Final sync
+            logger.info("Final CUDA synchronization...")
             torch.cuda.synchronize()
+            logger.info("Final sync complete")
 
         # Final garbage collection
+        logger.info("Final garbage collection pass...")
         gc.collect()
+        logger.info("Final GC complete")
 
         vram_after = self._get_vram_info()["used_gb"]
         freed = vram_before - vram_after
 
-        logger.info(f"Full unload complete. VRAM: {vram_before:.2f}GB -> {vram_after:.2f}GB (freed {freed:.2f}GB)")
+        logger.info(f"===== FULL UNLOAD COMPLETE =====")
+        logger.info(f"VRAM: {vram_before:.2f}GB -> {vram_after:.2f}GB (freed {freed:.2f}GB)")
 
         # Verify VRAM is in a clean state (< 2GB should be just driver overhead)
         if vram_after > 2.0:
@@ -351,7 +387,12 @@ class PipelineManager:
         import torch
 
         if pipeline is None:
+            logger.info(f"Deep cleanup skipped: {name} pipeline is None")
             return
+
+        logger.info(f"Deep cleanup starting for {name} pipeline...")
+        components_moved = 0
+        components_failed = 0
 
         # Common pipeline components that may hold GPU tensors
         components_to_move = [
@@ -367,67 +408,90 @@ class PipelineManager:
                     try:
                         if hasattr(comp, 'to'):
                             comp.to('cpu')
-                            logger.debug(f"Moved {name}.{comp_name} to CPU")
+                            logger.info(f"  Moved {name}.{comp_name} to CPU")
+                            components_moved += 1
                     except Exception as e:
-                        logger.debug(f"Could not move {name}.{comp_name} to CPU: {e}")
+                        logger.warning(f"  Could not move {name}.{comp_name} to CPU: {e}")
+                        components_failed += 1
 
         # Check for components dict (hy3dgen style)
         if hasattr(pipeline, 'components') and isinstance(pipeline.components, dict):
+            logger.info(f"Processing {name}.components dict ({len(pipeline.components)} items)...")
             for comp_name, comp in pipeline.components.items():
                 if comp is not None and hasattr(comp, 'to'):
                     try:
                         comp.to('cpu')
-                        logger.debug(f"Moved {name}.components.{comp_name} to CPU")
-                    except Exception:
-                        pass
+                        logger.info(f"  Moved {name}.components.{comp_name} to CPU")
+                        components_moved += 1
+                    except Exception as e:
+                        logger.warning(f"  Could not move {name}.components.{comp_name} to CPU: {e}")
+                        components_failed += 1
 
         # Handle VAE's surface extractor specially (can have cached GPU tensors)
         if hasattr(pipeline, 'vae') and pipeline.vae is not None:
             vae = pipeline.vae
             if hasattr(vae, 'surface_extractor'):
                 se = vae.surface_extractor
+                logger.info(f"Cleaning up {name}.vae.surface_extractor...")
                 # DMCSurfaceExtractor caches self.dmc on GPU
                 if hasattr(se, 'dmc') and se.dmc is not None:
                     try:
                         if hasattr(se.dmc, 'to'):
                             se.dmc.to('cpu')
+                            logger.info(f"  Moved {name}.vae.surface_extractor.dmc to CPU")
                         else:
                             del se.dmc
                             se.dmc = None
-                        logger.debug(f"Cleaned up {name}.vae.surface_extractor.dmc")
-                    except Exception:
-                        pass
+                            logger.info(f"  Deleted {name}.vae.surface_extractor.dmc")
+                        components_moved += 1
+                    except Exception as e:
+                        logger.warning(f"  Could not clean up {name}.vae.surface_extractor.dmc: {e}")
+                        components_failed += 1
+
+        logger.info(f"Deep cleanup complete for {name}: {components_moved} moved, {components_failed} failed")
 
     async def _load_shape_pipeline(self, progress_callback: Optional[ProgressCallback] = None) -> dict:
         """Load the shape generation pipeline (Hunyuan3D-2.1)."""
         import torch
         from src.config import get_inference_dtype
 
+        logger.info("===== LOADING SHAPE PIPELINE =====")
+        logger.info(f"Model path: {self._shape_model_path}")
+        logger.info(f"Subfolder: hunyuan3d-dit-v2-1")
+
         self._shape_state = PipelineState.LOADING
         await self._broadcast_status("Loading shape model (21GB)...", 0.35)
         if progress_callback:
             progress_callback(0.35, "Loading shape model (21GB)...")
 
-        logger.info("Loading shape pipeline from Hunyuan3D-2.1...")
+        vram_start = self._get_vram_info()
+        logger.info(f"VRAM before load: {vram_start['used_gb']:.2f}GB")
 
         try:
             # Import the pipeline class
+            logger.info("Importing Hunyuan3DDiTFlowMatchingPipeline...")
             await self._broadcast_status("Importing Hunyuan3D...", 0.4)
             if progress_callback:
                 progress_callback(0.4, "Importing Hunyuan3D...")
 
             from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
+            logger.info("Import successful")
 
             # Get optimal dtype
             dtype = get_inference_dtype()
             if dtype is None:
                 dtype = torch.bfloat16
+            logger.info(f"Using dtype: {dtype}")
 
             await self._broadcast_status("Downloading/loading model weights...", 0.45)
             if progress_callback:
                 progress_callback(0.45, "Downloading/loading model weights...")
 
             # Load the model (this takes time - downloads if not cached)
+            logger.info("Loading model from pretrained (this may take a while)...")
+            logger.info("  - Checking HuggingFace cache...")
+            load_start = time.time()
+
             self._shape_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
                 self._shape_model_path,
                 subfolder="hunyuan3d-dit-v2-1",
@@ -435,13 +499,24 @@ class PipelineManager:
                 use_safetensors=False,
             )
 
+            load_time = time.time() - load_start
+            logger.info(f"Model loaded from pretrained in {load_time:.1f}s")
+            vram_after_load = self._get_vram_info()
+            logger.info(f"VRAM after load (before GPU move): {vram_after_load['used_gb']:.2f}GB")
+
             await self._broadcast_status("Moving model to GPU...", 0.8)
             if progress_callback:
                 progress_callback(0.8, "Moving model to GPU...")
 
             # Move to GPU
             if torch.cuda.is_available():
+                logger.info("Moving shape pipeline to CUDA...")
+                move_start = time.time()
                 self._shape_pipeline.to("cuda")
+                move_time = time.time() - move_start
+                logger.info(f"Model moved to CUDA in {move_time:.1f}s")
+            else:
+                logger.warning("CUDA not available - model staying on CPU")
 
             self._shape_state = PipelineState.READY
             vram = self._get_vram_info()
@@ -450,7 +525,8 @@ class PipelineManager:
             if progress_callback:
                 progress_callback(1.0, f"Shape model ready ({vram['used_gb']:.1f}GB)")
 
-            logger.info(f"Shape pipeline loaded. VRAM: {vram['used_gb']:.2f}GB")
+            logger.info("===== SHAPE PIPELINE READY =====")
+            logger.info(f"VRAM used: {vram['used_gb']:.2f}GB (loaded {vram['used_gb'] - vram_start['used_gb']:.2f}GB)")
 
             return {
                 "success": True,
@@ -469,19 +545,26 @@ class PipelineManager:
         """Load the texture generation pipeline (Hunyuan3D-2 Paint)."""
         import torch
 
+        logger.info("===== LOADING TEXTURE PIPELINE =====")
+        logger.info(f"Model path: {self._texture_model_path}")
+        logger.info(f"Subfolder: {self._texture_subfolder}")
+
         self._texture_state = PipelineState.LOADING
         await self._broadcast_status("Loading texture model (18GB)...", 0.35)
         if progress_callback:
             progress_callback(0.35, "Loading texture model (18GB)...")
 
-        logger.info("Loading texture pipeline from Hunyuan3D-2...")
+        vram_start = self._get_vram_info()
+        logger.info(f"VRAM before load: {vram_start['used_gb']:.2f}GB")
 
         try:
+            logger.info("Importing Hunyuan3DPaintPipeline...")
             await self._broadcast_status("Importing Hunyuan3D Paint...", 0.4)
             if progress_callback:
                 progress_callback(0.4, "Importing Hunyuan3D Paint...")
 
             from hy3dgen.texgen import Hunyuan3DPaintPipeline
+            logger.info("Import successful")
 
             await self._broadcast_status("Downloading/loading texture weights...", 0.45)
             if progress_callback:
@@ -490,25 +573,44 @@ class PipelineManager:
             # Load the texture pipeline
             # Note: Hunyuan3DPaintPipeline is NOT an nn.Module - it doesn't have .to()
             # It loads its internal models to CUDA automatically in load_models()
+            logger.info("Loading texture model from pretrained (this may take a while)...")
+            logger.info("  - Checking HuggingFace cache...")
+            load_start = time.time()
+
             self._texture_pipeline = Hunyuan3DPaintPipeline.from_pretrained(
                 self._texture_model_path,
                 subfolder=self._texture_subfolder,
             )
 
+            load_time = time.time() - load_start
+            logger.info(f"Texture model loaded from pretrained in {load_time:.1f}s")
+            vram_after_load = self._get_vram_info()
+            logger.info(f"VRAM after load: {vram_after_load['used_gb']:.2f}GB")
+
             # CRITICAL: Enable CPU offloading to prevent VRAM spike
             # This keeps models on CPU and only loads them to GPU when needed
             # Without this, all models load to GPU at once causing 17GB+ VRAM usage
+            logger.info("Enabling CPU offloading for texture pipeline...")
             if hasattr(self._texture_pipeline, 'enable_model_cpu_offload'):
                 try:
                     self._texture_pipeline.enable_model_cpu_offload()
-                    logger.info("Enabled CPU offloading for texture pipeline (reduces peak VRAM)")
+                    logger.info("CPU offloading ENABLED - models will move to GPU only when needed")
+                    logger.info("This prevents VRAM spike from 17GB+ to ~10-12GB peak")
                 except Exception as e:
                     logger.warning(f"Could not enable CPU offloading: {e}")
+                    logger.warning("WARNING: Without CPU offloading, texture may use 17GB+ VRAM!")
+            else:
+                logger.warning("Texture pipeline does not support enable_model_cpu_offload()")
+                logger.warning("WARNING: Texture generation may use excessive VRAM!")
+
+            vram_after_offload = self._get_vram_info()
+            logger.info(f"VRAM after offload config: {vram_after_offload['used_gb']:.2f}GB")
 
             # Texture quality settings for Godot game-ready assets
             # 1024px with 4 views provides good quality without excessive VRAM
             # CPU offloading keeps peak VRAM manageable
             TARGET_RESOLUTION = 1024  # Game-quality textures
+            logger.info(f"Configuring texture settings: target resolution = {TARGET_RESOLUTION}px")
 
             if hasattr(self._texture_pipeline, 'render'):
                 render = self._texture_pipeline.render
@@ -517,9 +619,12 @@ class PipelineManager:
                 # Use proper setter methods to update the render object
                 if hasattr(render, 'set_default_render_resolution'):
                     render.set_default_render_resolution(TARGET_RESOLUTION)
+                    logger.info(f"  Render resolution: {old_render} -> {TARGET_RESOLUTION}")
                 if hasattr(render, 'set_default_texture_resolution'):
                     render.set_default_texture_resolution(TARGET_RESOLUTION)
-                logger.info(f"Optimized texture render: {old_render}->{TARGET_RESOLUTION}, texture: {old_texture}->{TARGET_RESOLUTION}")
+                    logger.info(f"  Texture resolution: {old_texture} -> {TARGET_RESOLUTION}")
+            else:
+                logger.warning("Texture pipeline has no 'render' attribute - using defaults")
 
             # Use 4 camera views for good coverage (front, right, back, left)
             # This provides full horizontal coverage for game-ready textures
@@ -532,7 +637,10 @@ class PipelineManager:
                 config.candidate_view_weights = [1.0, 0.5, 0.5, 0.5]  # Front weighted higher
                 config.render_size = TARGET_RESOLUTION
                 config.texture_size = TARGET_RESOLUTION
-                logger.info(f"Optimized texture views: {old_views}->4 (horizontal coverage)")
+                logger.info(f"  Camera views: {old_views} -> 4 (front, right, back, left)")
+                logger.info(f"  View weights: [1.0, 0.5, 0.5, 0.5] (front emphasized)")
+            else:
+                logger.warning("Texture pipeline has no 'config' attribute - using default views")
 
             await self._broadcast_status("Texture model loaded", 0.9)
             if progress_callback:
@@ -545,7 +653,8 @@ class PipelineManager:
             if progress_callback:
                 progress_callback(1.0, f"Texture model ready ({vram['used_gb']:.1f}GB)")
 
-            logger.info(f"Texture pipeline loaded. VRAM: {vram['used_gb']:.2f}GB")
+            logger.info("===== TEXTURE PIPELINE READY =====")
+            logger.info(f"VRAM used: {vram['used_gb']:.2f}GB (loaded {vram['used_gb'] - vram_start['used_gb']:.2f}GB)")
 
             return {
                 "success": True,

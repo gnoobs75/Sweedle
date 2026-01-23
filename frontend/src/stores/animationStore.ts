@@ -89,6 +89,13 @@ export interface AnimationData {
   tracks: KeyframeTrack[];
 }
 
+// Embedded animation info (from skinned GLB)
+export interface EmbeddedAnimation {
+  name: string;
+  duration: number;
+  index: number;
+}
+
 interface AnimationState {
   // Available presets
   presets: AnimationPreset[];
@@ -97,6 +104,10 @@ interface AnimationState {
   // Applied animations
   clips: AnimationClip[];
   activeClipId: string | null;
+
+  // Embedded animations (from skinned GLB preview)
+  embeddedAnimations: EmbeddedAnimation[];
+  activeEmbeddedName: string | null;
 
   // Playback state
   isPlaying: boolean;
@@ -130,6 +141,11 @@ interface AnimationState {
   setError: (error: string | null) => void;
   clearError: () => void;
   reset: () => void;
+
+  // Embedded animation actions
+  setEmbeddedAnimations: (animations: EmbeddedAnimation[]) => void;
+  setActiveEmbeddedName: (name: string | null) => void;
+  clearEmbeddedAnimations: () => void;
 }
 
 const defaultParameters: AnimationParameters = {
@@ -143,6 +159,8 @@ const initialState = {
   selectedPresetId: null as string | null,
   clips: [] as AnimationClip[],
   activeClipId: null as string | null,
+  embeddedAnimations: [] as EmbeddedAnimation[],
+  activeEmbeddedName: null as string | null,
   isPlaying: false,
   currentTime: 0,
   parameters: { ...defaultParameters },
@@ -210,4 +228,18 @@ export const useAnimationStore = create<AnimationState>((set, get) => ({
   clearError: () => set({ error: null }),
 
   reset: () => set(initialState),
+
+  // Embedded animation actions
+  setEmbeddedAnimations: (animations) =>
+    set({
+      embeddedAnimations: animations,
+      // Auto-select first animation if available
+      activeEmbeddedName: animations.length > 0 ? animations[0].name : null,
+    }),
+
+  setActiveEmbeddedName: (name) =>
+    set({ activeEmbeddedName: name, currentTime: 0, isPlaying: false }),
+
+  clearEmbeddedAnimations: () =>
+    set({ embeddedAnimations: [], activeEmbeddedName: null }),
 }));

@@ -345,7 +345,24 @@ class BackgroundWorker:
         Args:
             job: Job instance from queue
         """
-        logger.info(f"Processing job {job.id}: {job.job_type}")
+        import time as time_module
+        job_start = time_module.time()
+
+        logger.info("=" * 60)
+        logger.info(f"===== JOB STARTING: {job.id} =====")
+        logger.info("=" * 60)
+        logger.info(f"Job type: {job.job_type}")
+        logger.info(f"Job params: {job.params if hasattr(job, 'params') else 'N/A'}")
+
+        # Log VRAM state at job start
+        try:
+            import torch
+            if torch.cuda.is_available():
+                vram_allocated = torch.cuda.memory_allocated(0) / 1e9
+                vram_total = torch.cuda.get_device_properties(0).total_memory / 1e9
+                logger.info(f"VRAM at job start: {vram_allocated:.2f}GB / {vram_total:.2f}GB")
+        except:
+            pass
 
         try:
             # Send initial progress
@@ -357,6 +374,7 @@ class BackgroundWorker:
             )
 
             # Route to appropriate handler
+            logger.info(f"Routing to handler for job type: {job.job_type}")
             if job.job_type == "image_to_3d":
                 result = await self._process_image_to_3d(job)
             elif job.job_type == "text_to_3d":
@@ -369,7 +387,20 @@ class BackgroundWorker:
                 raise ValueError(f"Unknown job type: {job.job_type}")
 
             # Mark job as complete
+            job_elapsed = time_module.time() - job_start
             if result.get("success"):
+                logger.info("=" * 60)
+                logger.info(f"===== JOB COMPLETED: {job.id} =====")
+                logger.info("=" * 60)
+                logger.info(f"Job type: {job.job_type}")
+                logger.info(f"Total time: {job_elapsed:.1f}s")
+                if result.get("asset_id"):
+                    logger.info(f"Asset ID: {result['asset_id']}")
+                if result.get("vertex_count"):
+                    logger.info(f"Mesh: {result.get('vertex_count', 0):,} vertices, {result.get('face_count', 0):,} faces")
+                if result.get("generation_time"):
+                    logger.info(f"Generation time: {result['generation_time']:.1f}s")
+
                 await self._queue.complete(job.id, result=result)
                 await self._ws_manager.send_progress(
                     job_id=job.id,
@@ -382,6 +413,7 @@ class BackgroundWorker:
 
                 # Update asset status in database
                 if result.get("asset_id") and job.job_type in ("image_to_3d", "add_texture"):
+                    logger.info(f"Updating asset status to COMPLETED: {result['asset_id']}")
                     await self._update_asset_status(
                         result["asset_id"],
                         AssetStatus.COMPLETED,
@@ -390,6 +422,7 @@ class BackgroundWorker:
 
                 # Send rigging-specific completion message
                 if job.job_type == "rig_asset" and result.get("asset_id"):
+                    logger.info(f"Sending rigging complete notification: {result.get('bone_count', 0)} bones")
                     await self._ws_manager.send_rigging_complete(
                         asset_id=result["asset_id"],
                         character_type=result.get("character_type", "unknown"),
@@ -398,6 +431,7 @@ class BackgroundWorker:
 
                 # Send asset ready notification
                 if result.get("asset_id"):
+                    logger.info(f"Sending asset_ready notification for: {result['asset_id']}")
                     await self._ws_manager.send_asset_ready(
                         asset_id=result["asset_id"],
                         name=result.get("name", "Untitled"),
@@ -406,6 +440,13 @@ class BackgroundWorker:
                     )
             else:
                 error = result.get("error", "Unknown error")
+                logger.info("=" * 60)
+                logger.info(f"===== JOB FAILED: {job.id} =====")
+                logger.info("=" * 60)
+                logger.info(f"Job type: {job.job_type}")
+                logger.info(f"Total time: {job_elapsed:.1f}s")
+                logger.error(f"Error: {error}")
+
                 await self._queue.complete(job.id, error=error)
                 await self._ws_manager.send_progress(
                     job_id=job.id,
@@ -433,7 +474,8 @@ class BackgroundWorker:
                     )
 
         except Exception as e:
-            logger.exception(f"Job {job.id} failed: {e}")
+            job_elapsed = time_module.time() - job_start
+            logger.exception(f"Job {job.id} failed with exception after {job_elapsed:.1f}s: {e}")
             error_msg = str(e)
 
             await self._queue.complete(job.id, error=error_msg)
@@ -449,14 +491,20 @@ class BackgroundWorker:
         await self._ws_manager.send_queue_status(self._queue.get_status())
 
         # Clear VRAM after job completes for next job
+        logger.info("Cleaning up VRAM after job...")
         import gc
         gc.collect()
         try:
             import torch
             if torch.cuda.is_available():
+                vram_before = torch.cuda.memory_allocated(0) / 1e9
                 torch.cuda.empty_cache()
+                vram_after = torch.cuda.memory_allocated(0) / 1e9
+                logger.info(f"VRAM cleanup: {vram_before:.2f}GB -> {vram_after:.2f}GB")
         except ImportError:
             pass
+
+        logger.info(f"Job {job.id} processing complete")
 
     async def _process_job_with_preprocessed(self, preprocessed: PreprocessedJob) -> None:
         """Process a job that has already been preprocessed.

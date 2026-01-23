@@ -486,7 +486,17 @@ class Hunyuan3DPipeline:
         progress_callback: Optional[Callable] = None,
     ):
         """Synchronous shape generation with GPU optimizations."""
-        logger.info(f"_generate_shape called - pipeline is None: {self._shape_pipeline is None}, initialized: {self._initialized}, id(self): {id(self)}")
+        import torch
+
+        logger.info("===== SHAPE GENERATION STARTING =====")
+        logger.info(f"Pipeline state: initialized={self._initialized}, pipeline_loaded={self._shape_pipeline is not None}")
+        logger.info(f"Config: steps={config.inference_steps}, guidance={config.guidance_scale}, octree={config.octree_resolution}")
+        logger.info(f"Input image size: {image.size if hasattr(image, 'size') else 'unknown'}")
+
+        if torch.cuda.is_available():
+            vram_start = torch.cuda.memory_allocated(0) / 1e9
+            logger.info(f"VRAM at start: {vram_start:.2f}GB")
+
         if self._shape_pipeline is None:
             # Shape pipeline was unloaded (e.g., for texture generation)
             # Reload it before generating
@@ -501,8 +511,6 @@ class Hunyuan3DPipeline:
                 return self._create_mock_mesh()
 
         try:
-            import torch
-
             generator = None
             if config.seed is not None:
                 # MPS doesn't support Generator with device parameter
@@ -510,21 +518,69 @@ class Hunyuan3DPipeline:
                 gen_device = "cpu" if self.device == "mps" else self.device
                 generator = torch.Generator(device=gen_device)
                 generator.manual_seed(config.seed)
+                logger.info(f"Using seed: {config.seed} on device: {gen_device}")
+            else:
+                logger.info("No seed specified - using random generation")
 
             # Use inference_mode for optimal performance (faster than no_grad)
             # This disables gradient computation and view tracking
-            with torch.inference_mode():
-                # Run shape generation
-                result = self._shape_pipeline(
-                    image=image,
-                    num_inference_steps=config.inference_steps,
-                    guidance_scale=config.guidance_scale,
-                    octree_resolution=config.octree_resolution,
-                    generator=generator,
-                    output_type='trimesh',
-                )
+            logger.info("Starting Hunyuan3D shape pipeline...")
+            logger.info(f"  - Inference steps: {config.inference_steps}")
+            logger.info(f"  - Guidance scale: {config.guidance_scale}")
+            logger.info(f"  - Octree resolution: {config.octree_resolution}")
+
+            # Force log flush before entering CUDA inference (helps diagnose crashes)
+            import sys
+            for handler in logging.getLogger().handlers:
+                handler.flush()
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            # Sync CUDA before inference to ensure clean state
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                allocated = torch.cuda.memory_allocated(0) / 1e9
+                reserved = torch.cuda.memory_reserved(0) / 1e9
+                total = torch.cuda.get_device_properties(0).total_memory / 1e9
+                logger.info(f"CUDA synchronized. VRAM: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved, {total - allocated:.2f}GB free")
+
+            generation_start = time.time()
+
+            logger.info("Entering torch.inference_mode()...")
+            for handler in logging.getLogger().handlers:
+                handler.flush()
+
+            try:
+                with torch.inference_mode():
+                    logger.info("Inside torch.inference_mode(), calling pipeline...")
+                    for handler in logging.getLogger().handlers:
+                        handler.flush()
+
+                    # Run shape generation
+                    result = self._shape_pipeline(
+                        image=image,
+                        num_inference_steps=config.inference_steps,
+                        guidance_scale=config.guidance_scale,
+                        octree_resolution=config.octree_resolution,
+                        generator=generator,
+                        output_type='trimesh',
+                    )
+            except Exception as inference_error:
+                logger.error(f"Pipeline inference crashed: {inference_error}")
+                if torch.cuda.is_available():
+                    vram_at_crash = torch.cuda.memory_allocated(0) / 1e9
+                    logger.error(f"VRAM at crash: {vram_at_crash:.2f}GB")
+                raise
+
+            generation_time = time.time() - generation_start
+            logger.info(f"Shape pipeline completed in {generation_time:.1f}s")
+
+            if torch.cuda.is_available():
+                vram_after = torch.cuda.memory_allocated(0) / 1e9
+                logger.info(f"VRAM after generation: {vram_after:.2f}GB (used {vram_after - vram_start:.2f}GB)")
 
             mesh = result[0] if isinstance(result, (list, tuple)) else result
+            logger.info(f"Result type: {type(mesh).__name__}")
 
             # Force mesh to be CPU-only by converting to trimesh properly
             # This ensures no GPU tensors are attached to the mesh
@@ -532,14 +588,22 @@ class Hunyuan3DPipeline:
                 if hasattr(mesh, 'vertices') and hasattr(mesh.vertices, 'cpu'):
                     # If vertices are tensors, convert to numpy
                     import numpy as np
+                    logger.info("Converting mesh tensors to CPU numpy arrays...")
                     vertices = mesh.vertices.cpu().numpy() if hasattr(mesh.vertices, 'cpu') else np.array(mesh.vertices)
                     faces = mesh.faces.cpu().numpy() if hasattr(mesh.faces, 'cpu') else np.array(mesh.faces)
 
                     import trimesh
                     mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-                    logger.info("Converted mesh to CPU-only trimesh")
+                    logger.info(f"Converted to CPU trimesh: {len(vertices):,} vertices, {len(faces):,} faces")
             except Exception as e:
                 logger.warning(f"Could not convert mesh to CPU: {e}")
+
+            # Log final mesh stats
+            vertex_count = len(mesh.vertices) if hasattr(mesh, 'vertices') else 0
+            face_count = len(mesh.faces) if hasattr(mesh, 'faces') else 0
+            logger.info("===== SHAPE GENERATION COMPLETE =====")
+            logger.info(f"Output mesh: {vertex_count:,} vertices, {face_count:,} faces")
+            logger.info(f"Total time: {generation_time:.1f}s")
 
             if progress_callback:
                 progress_callback(1.0, "Shape complete")
@@ -548,6 +612,9 @@ class Hunyuan3DPipeline:
 
         except Exception as e:
             logger.error(f"Shape generation failed: {e}")
+            if torch.cuda.is_available():
+                vram_error = torch.cuda.memory_allocated(0) / 1e9
+                logger.error(f"VRAM at error: {vram_error:.2f}GB")
             raise
 
     def _generate_texture(
@@ -558,6 +625,10 @@ class Hunyuan3DPipeline:
         progress_callback: Optional[Callable] = None,
     ):
         """Synchronous texture generation using Hunyuan3D-Paint with GPU optimizations."""
+        import torch
+
+        logger.info("===== TEXTURE GENERATION STARTING =====")
+
         if self._texture_pipeline is None:
             logger.info("Texture pipeline not available - returning untextured mesh")
             if progress_callback:
@@ -565,9 +636,11 @@ class Hunyuan3DPipeline:
             return mesh
 
         try:
-            import torch
-
-            logger.info("Starting texture generation with Hunyuan3D-Paint...")
+            # Log input details
+            mesh_vertices = len(mesh.vertices) if hasattr(mesh, 'vertices') else 0
+            mesh_faces = len(mesh.faces) if hasattr(mesh, 'faces') else 0
+            logger.info(f"Input mesh: {mesh_vertices:,} vertices, {mesh_faces:,} faces")
+            logger.info(f"Input image size: {image.size if hasattr(image, 'size') else 'unknown'}")
 
             # Log VRAM status before texture generation
             if torch.cuda.is_available():
@@ -577,14 +650,14 @@ class Hunyuan3DPipeline:
                 free_vram = total - allocated
                 logger.info(f"VRAM before texture: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved, {free_vram:.2f}GB free")
 
-                # Texture pipeline needs ~18GB, warn if not enough
+                # Texture pipeline needs ~18GB without CPU offloading, ~10-12GB with it
                 if free_vram < 16.0:
-                    logger.warning(f"Only {free_vram:.2f}GB VRAM free - texture pipeline needs ~18GB!")
-                    logger.warning("Texture generation may fail due to insufficient VRAM")
-                    logger.warning("Consider disabling texture or restarting backend for clean VRAM state")
+                    logger.warning(f"Only {free_vram:.2f}GB VRAM free - may be tight for texture generation")
+                    logger.warning("CPU offloading should keep peak VRAM manageable")
 
             # Debug: log texture pipeline state
-            logger.info(f"Texture pipeline check: device={self.device}, pipeline is None={self._texture_pipeline is None}, has 'to'={hasattr(self._texture_pipeline, 'to') if self._texture_pipeline else 'N/A'}")
+            logger.info(f"Texture pipeline type: {type(self._texture_pipeline).__name__}")
+            logger.info(f"Target device: {self.device}")
 
             # Ensure texture pipeline is on GPU
             if self.device == "cuda" and self._texture_pipeline is not None and hasattr(self._texture_pipeline, 'to'):
@@ -1131,6 +1204,21 @@ async def generate_mesh(
     import trimesh
     from concurrent.futures import ThreadPoolExecutor
 
+    logger.info("========================================")
+    logger.info("===== MESH GENERATION (STANDALONE) =====")
+    logger.info("========================================")
+    logger.info(f"Asset ID: {asset_id}")
+    logger.info(f"Output directory: {output_dir}")
+    logger.info(f"Pipeline type: {type(pipeline).__name__ if pipeline else 'None'}")
+    logger.info(f"Image size: {image.size if hasattr(image, 'size') else 'unknown'}")
+    logger.info(f"Config: steps={config.inference_steps}, guidance={config.guidance_scale}, octree={config.octree_resolution}")
+    logger.info(f"Target faces: {config.face_count or 'unlimited'}")
+
+    if torch.cuda.is_available():
+        vram_start = torch.cuda.memory_allocated(0) / 1e9
+        vram_total = torch.cuda.get_device_properties(0).total_memory / 1e9
+        logger.info(f"VRAM at start: {vram_start:.2f}GB / {vram_total:.2f}GB")
+
     start_time = time.time()
     executor = ThreadPoolExecutor(max_workers=2)
     loop = asyncio.get_running_loop()
@@ -1141,6 +1229,7 @@ async def generate_mesh(
 
     try:
         update_progress(0.0, "Starting mesh generation...")
+        logger.info("--- Step 1: Running shape generation ---")
 
         # Step 1: Run shape generation
         update_progress(0.05, "Generating 3D shape...")
@@ -1152,11 +1241,16 @@ async def generate_mesh(
             """Synchronous shape generation with tqdm capture."""
             from src.core.tqdm_capture import capture_tqdm_progress
 
+            logger.info("Entering run_shape_generation executor...")
+
             generator = None
             if config.seed is not None:
                 gen_device = "cuda" if torch.cuda.is_available() else "cpu"
                 generator = torch.Generator(device=gen_device)
                 generator.manual_seed(config.seed)
+                logger.info(f"Using seed: {config.seed} on device: {gen_device}")
+            else:
+                logger.info("No seed - random generation")
 
             # Callback for tqdm progress - updates the holder
             def on_tqdm_progress(stage: str, percent: float, current: int, total: int):
@@ -1172,68 +1266,140 @@ async def generate_mesh(
                     overall = 0.50 + percent * 0.20
                 else:
                     overall = 0.05 + percent * 0.60
+                # Log progress at key intervals (every 10%)
+                if current == 1 or current == total or current % max(1, total // 10) == 0:
+                    if torch.cuda.is_available():
+                        vram_now = torch.cuda.memory_allocated(0) / 1e9
+                        logger.info(f"  {stage}: {current}/{total} ({percent*100:.0f}%) - VRAM: {vram_now:.2f}GB")
+                    else:
+                        logger.info(f"  {stage}: {current}/{total} ({percent*100:.0f}%)")
                 # Call the progress callback with detailed stage info
                 if progress_callback:
                     progress_callback(overall, f"{stage}: {current}/{total}")
 
-            with torch.inference_mode():
-                # Capture tqdm output during inference
-                with capture_tqdm_progress(on_tqdm_progress, min_update_interval=0.3):
-                    result = pipeline(
-                        image=image,
-                        num_inference_steps=config.inference_steps,
-                        guidance_scale=config.guidance_scale,
-                        octree_resolution=config.octree_resolution,
-                        generator=generator,
-                        output_type='trimesh',
-                    )
+            logger.info("Starting Hunyuan3D pipeline inference...")
+            logger.info(f"  Steps: {config.inference_steps}")
+            logger.info(f"  Guidance: {config.guidance_scale}")
+            logger.info(f"  Octree: {config.octree_resolution}")
+
+            # Force log flush before entering CUDA inference (helps diagnose crashes)
+            import sys
+            for handler in logging.getLogger().handlers:
+                handler.flush()
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            inference_start = time.time()
+
+            # Sync CUDA before inference to ensure clean state
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                allocated = torch.cuda.memory_allocated(0) / 1e9
+                reserved = torch.cuda.memory_reserved(0) / 1e9
+                total = torch.cuda.get_device_properties(0).total_memory / 1e9
+                logger.info(f"CUDA synchronized. VRAM: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved, {total - allocated:.2f}GB free")
+
+            logger.info("Entering torch.inference_mode()...")
+            for handler in logging.getLogger().handlers:
+                handler.flush()
+
+            try:
+                with torch.inference_mode():
+                    logger.info("Inside torch.inference_mode(), starting pipeline call...")
+                    for handler in logging.getLogger().handlers:
+                        handler.flush()
+
+                    # Capture tqdm output during inference
+                    with capture_tqdm_progress(on_tqdm_progress, min_update_interval=0.3):
+                        result = pipeline(
+                            image=image,
+                            num_inference_steps=config.inference_steps,
+                            guidance_scale=config.guidance_scale,
+                            octree_resolution=config.octree_resolution,
+                            generator=generator,
+                            output_type='trimesh',
+                        )
+            except Exception as inference_error:
+                logger.error(f"Pipeline inference crashed: {inference_error}")
+                if torch.cuda.is_available():
+                    vram_at_crash = torch.cuda.memory_allocated(0) / 1e9
+                    logger.error(f"VRAM at crash: {vram_at_crash:.2f}GB")
+                raise
+
+            inference_time = time.time() - inference_start
+            logger.info(f"Pipeline inference complete in {inference_time:.1f}s")
 
             mesh = result[0] if isinstance(result, (list, tuple)) else result
+            logger.info(f"Result type: {type(mesh).__name__}")
 
             # Convert to CPU-only trimesh
             try:
                 if hasattr(mesh, 'vertices') and hasattr(mesh.vertices, 'cpu'):
                     import numpy as np
+                    logger.info("Converting mesh tensors to CPU...")
                     vertices = mesh.vertices.cpu().numpy() if hasattr(mesh.vertices, 'cpu') else np.array(mesh.vertices)
                     faces = mesh.faces.cpu().numpy() if hasattr(mesh.faces, 'cpu') else np.array(mesh.faces)
                     mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+                    logger.info(f"Converted to trimesh: {len(vertices):,} vertices, {len(faces):,} faces")
             except Exception as e:
                 logger.warning(f"Could not convert mesh to CPU: {e}")
+
+            if torch.cuda.is_available():
+                vram_after = torch.cuda.memory_allocated(0) / 1e9
+                logger.info(f"VRAM after shape generation: {vram_after:.2f}GB")
 
             return mesh
 
         mesh = await loop.run_in_executor(executor, run_shape_generation)
+        logger.info("--- Shape generation executor complete ---")
         update_progress(0.70, "Shape generated")
 
         # Step 2: Post-process - decimation if needed
+        logger.info("--- Step 2: Post-processing (decimation) ---")
         if config.face_count and hasattr(mesh, 'faces'):
             current_faces = len(mesh.faces)
+            logger.info(f"Current faces: {current_faces:,}, target: {config.face_count:,}")
             if current_faces > config.face_count:
                 update_progress(0.75, f"Decimating mesh ({current_faces:,} -> {config.face_count:,} faces)...")
+                logger.info(f"Decimating mesh: {current_faces:,} -> {config.face_count:,} faces")
 
                 def decimate():
                     target_faces = config.face_count
-                    logger.info(f"Decimating: {current_faces:,} -> {target_faces:,} faces")
+                    decimate_start = time.time()
                     # Use face_count parameter (not percent) for target face count
-                    return mesh.simplify_quadric_decimation(face_count=target_faces)
+                    result = mesh.simplify_quadric_decimation(face_count=target_faces)
+                    decimate_time = time.time() - decimate_start
+                    logger.info(f"Decimation complete in {decimate_time:.1f}s")
+                    return result
 
                 mesh = await loop.run_in_executor(executor, decimate)
-                logger.info(f"Decimated to {len(mesh.faces):,} faces")
+                logger.info(f"Decimated to {len(mesh.faces):,} faces (target was {config.face_count:,})")
+            else:
+                logger.info(f"No decimation needed: {current_faces:,} <= {config.face_count:,}")
+        else:
+            logger.info("No face count limit specified - skipping decimation")
 
+        logger.info("--- Step 3: Saving mesh ---")
         update_progress(0.85, "Saving mesh...")
 
         # Step 3: Save mesh
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{asset_id}.{config.output_format.value}"
+        logger.info(f"Output path: {output_path}")
 
         def save_mesh():
+            logger.info(f"Exporting mesh to {config.output_format.value} format...")
+            save_start = time.time()
             mesh.export(str(output_path))
+            save_time = time.time() - save_start
+            logger.info(f"Mesh exported in {save_time:.1f}s")
             return len(mesh.vertices), len(mesh.faces)
 
         vertex_count, face_count = await loop.run_in_executor(executor, save_mesh)
         logger.info(f"Saved mesh: {vertex_count:,} vertices, {face_count:,} faces")
 
         # Step 4: Generate thumbnail
+        logger.info("--- Step 4: Generating thumbnail ---")
         update_progress(0.92, "Generating thumbnail...")
         thumbnail_path = output_dir / "thumbnail.png"
 
@@ -1245,6 +1411,9 @@ async def generate_mesh(
                 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
                 import numpy as np
 
+                logger.info("Creating thumbnail with matplotlib...")
+                thumb_start = time.time()
+
                 fig = plt.figure(figsize=(2.56, 2.56), facecolor='#1a1a2e')
                 ax = fig.add_subplot(111, projection='3d', facecolor='#1a1a2e')
 
@@ -1255,6 +1424,7 @@ async def generate_mesh(
                 if len(faces) > 5000:
                     indices = np.random.choice(len(faces), 5000, replace=False)
                     faces_sample = faces[indices]
+                    logger.info(f"Sampled {len(faces_sample)} faces for thumbnail (from {len(faces):,})")
                 else:
                     faces_sample = faces
 
@@ -1287,14 +1457,29 @@ async def generate_mesh(
                 img = img.resize((256, 256), PILImage.Resampling.LANCZOS)
                 img.save(thumbnail_path)
 
+                thumb_time = time.time() - thumb_start
+                logger.info(f"Thumbnail generated in {thumb_time:.1f}s: {thumbnail_path}")
                 return True
             except Exception as e:
-                logger.warning(f"Thumbnail failed: {e}")
+                logger.warning(f"Thumbnail generation failed: {e}")
                 return False
 
         await loop.run_in_executor(executor, generate_thumbnail)
 
         generation_time = time.time() - start_time
+
+        # Final VRAM check
+        if torch.cuda.is_available():
+            vram_end = torch.cuda.memory_allocated(0) / 1e9
+            logger.info(f"VRAM at completion: {vram_end:.2f}GB")
+
+        logger.info("========================================")
+        logger.info("===== MESH GENERATION COMPLETE =====")
+        logger.info("========================================")
+        logger.info(f"Total time: {generation_time:.1f}s")
+        logger.info(f"Output: {output_path}")
+        logger.info(f"Mesh stats: {vertex_count:,} vertices, {face_count:,} faces")
+
         update_progress(1.0, "Complete")
 
         return GenerationResult(
@@ -1309,6 +1494,9 @@ async def generate_mesh(
 
     except Exception as e:
         logger.exception(f"Mesh generation failed: {e}")
+        if torch.cuda.is_available():
+            vram_error = torch.cuda.memory_allocated(0) / 1e9
+            logger.error(f"VRAM at error: {vram_error:.2f}GB")
         return GenerationResult(
             success=False,
             error=str(e),
@@ -1353,23 +1541,30 @@ async def generate_texture_on_mesh(
             progress_callback(progress, stage)
 
     try:
-        logger.info("generate_texture_on_mesh called")
+        logger.info("==========================================")
+        logger.info("===== TEXTURE GENERATION (STANDALONE) =====")
+        logger.info("==========================================")
         update_progress(0.0, "Starting texture generation...")
 
         if pipeline is None:
             logger.error("Texture pipeline is None!")
             return False, "Texture pipeline not loaded"
 
-        logger.info(f"Pipeline type: {type(pipeline)}")
-        logger.info(f"Mesh type: {type(mesh)}, vertices: {len(mesh.vertices) if hasattr(mesh, 'vertices') else 'N/A'}")
-        logger.info(f"Image type: {type(image)}, size: {image.size if hasattr(image, 'size') else 'N/A'}")
+        # Log input details
+        mesh_vertices = len(mesh.vertices) if hasattr(mesh, 'vertices') else 0
+        mesh_faces = len(mesh.faces) if hasattr(mesh, 'faces') else 0
+        logger.info(f"Pipeline type: {type(pipeline).__name__}")
+        logger.info(f"Input mesh: {mesh_vertices:,} vertices, {mesh_faces:,} faces")
+        logger.info(f"Input image: {image.size if hasattr(image, 'size') else 'unknown'}")
+        logger.info(f"Output path: {output_path}")
 
         # Log VRAM before texture and verify we have enough headroom
         if torch.cuda.is_available():
             allocated = torch.cuda.memory_allocated(0) / 1e9
+            reserved = torch.cuda.memory_reserved(0) / 1e9
             total = torch.cuda.get_device_properties(0).total_memory / 1e9
             free_vram = total - allocated
-            logger.info(f"VRAM before texture: {allocated:.2f}GB allocated, {free_vram:.2f}GB free")
+            logger.info(f"VRAM status: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved, {free_vram:.2f}GB free")
 
             # Verify we have enough VRAM for texture generation
             # Texture needs ~10GB additional headroom during inference
@@ -1404,21 +1599,28 @@ async def generate_texture_on_mesh(
         def heartbeat_with_progress():
             """Background thread to log progress during texture generation."""
             UPDATE_INTERVAL = 5.0
+            iteration = 0
             while not texture_done.is_set():
+                iteration += 1
                 elapsed = time_module.time() - texture_start
                 # Log VRAM during generation
-                vram_str = ""
+                vram_info = ""
                 if torch.cuda.is_available():
                     try:
                         allocated = torch.cuda.memory_allocated(0) / 1e9
-                        vram_str = f" (VRAM: {allocated:.1f}GB)"
+                        reserved = torch.cuda.memory_reserved(0) / 1e9
+                        vram_info = f" | VRAM: {allocated:.1f}GB allocated, {reserved:.1f}GB reserved"
                     except:
                         pass
-                logger.info(f"Texture generation in progress... {elapsed:.1f}s elapsed{vram_str}")
+                # Format elapsed time nicely
+                minutes = int(elapsed // 60)
+                seconds = int(elapsed % 60)
+                time_str = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+                logger.info(f"[Texture Heartbeat #{iteration}] Elapsed: {time_str}{vram_info}")
                 if progress_callback:
                     estimated_progress = min(0.9, 0.2 + (elapsed / 60.0) * 0.7)
                     try:
-                        progress_callback(estimated_progress, f"Generating texture ({elapsed:.0f}s)...")
+                        progress_callback(estimated_progress, f"Generating texture ({time_str})...")
                     except Exception:
                         pass
                 texture_done.wait(timeout=UPDATE_INTERVAL)
@@ -1479,23 +1681,45 @@ async def generate_texture_on_mesh(
             heartbeat_thread.join(timeout=1)
 
         texture_elapsed = time_module.time() - texture_start
-        logger.info(f"Texture generation complete in {texture_elapsed:.1f}s")
+        minutes = int(texture_elapsed // 60)
+        seconds = int(texture_elapsed % 60)
+        time_str = f"{minutes}m {seconds}s" if minutes > 0 else f"{texture_elapsed:.1f}s"
+        logger.info(f"Texture pipeline complete in {time_str}")
 
         # Force CUDA sync to catch any async errors
         if torch.cuda.is_available():
+            logger.info("Synchronizing CUDA...")
             torch.cuda.synchronize()
-            logger.info("CUDA synchronized after texture")
+            vram_after = torch.cuda.memory_allocated(0) / 1e9
+            logger.info(f"CUDA synchronized. VRAM: {vram_after:.2f}GB")
 
+        logger.info("--- Saving textured mesh ---")
         update_progress(0.9, "Saving textured mesh...")
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        save_start = time_module.time()
         textured_mesh.export(str(output_path))
+        save_time = time_module.time() - save_start
+        logger.info(f"Textured mesh exported in {save_time:.1f}s")
+
+        # Log output mesh stats
+        out_vertices = len(textured_mesh.vertices) if hasattr(textured_mesh, 'vertices') else 0
+        out_faces = len(textured_mesh.faces) if hasattr(textured_mesh, 'faces') else 0
+        logger.info(f"Output mesh: {out_vertices:,} vertices, {out_faces:,} faces")
+
+        logger.info("==========================================")
+        logger.info("===== TEXTURE GENERATION COMPLETE =====")
+        logger.info("==========================================")
+        logger.info(f"Total time: {time_str}")
+        logger.info(f"Output: {output_path}")
 
         update_progress(1.0, "Texture complete")
-        logger.info(f"Saved textured mesh to {output_path}")
 
         return True, None
 
     except Exception as e:
         logger.exception(f"Texture generation failed: {e}")
+        if torch.cuda.is_available():
+            vram_error = torch.cuda.memory_allocated(0) / 1e9
+            logger.error(f"VRAM at error: {vram_error:.2f}GB")
         return False, str(e)

@@ -26,15 +26,17 @@ class Landmark:
 
 
 # Quadruped landmarks - only 8 key points to position
+# Note: +Z is forward (direction animal faces), -Z is backward (tail direction)
+# This matches Hunyuan3D mesh orientation and most game engine conventions
 QUADRUPED_LANDMARKS = {
     "Hips": Landmark("Hips", np.array([0, 0.6, 0]), "Center of body/pelvis", "#ff4080"),
-    "Chest": Landmark("Chest", np.array([0, 0.7, -0.6]), "Front of body where front legs attach", "#ff8040"),
-    "Head": Landmark("Head", np.array([0, 0.9, -1.0]), "Top/front of head", "#40ff80"),
-    "TailTip": Landmark("TailTip", np.array([0, 0.35, 0.7]), "End of tail", "#8040ff"),
-    "FrontLeftPaw": Landmark("FrontLeftPaw", np.array([0.15, 0.02, -0.65]), "Front left foot", "#40ffff"),
-    "FrontRightPaw": Landmark("FrontRightPaw", np.array([-0.15, 0.02, -0.65]), "Front right foot", "#40ffff"),
-    "BackLeftPaw": Landmark("BackLeftPaw", np.array([0.15, 0.02, 0.05]), "Back left foot", "#ffff40"),
-    "BackRightPaw": Landmark("BackRightPaw", np.array([-0.15, 0.02, 0.05]), "Back right foot", "#ffff40"),
+    "Chest": Landmark("Chest", np.array([0, 0.7, 0.6]), "Front of body where front legs attach", "#ff8040"),
+    "Head": Landmark("Head", np.array([0, 0.9, 1.0]), "Top/front of head", "#40ff80"),
+    "TailTip": Landmark("TailTip", np.array([0, 0.35, -0.7]), "End of tail", "#8040ff"),
+    "FrontLeftPaw": Landmark("FrontLeftPaw", np.array([0.15, 0.02, 0.65]), "Front left foot", "#40ffff"),
+    "FrontRightPaw": Landmark("FrontRightPaw", np.array([-0.15, 0.02, 0.65]), "Front right foot", "#40ffff"),
+    "BackLeftPaw": Landmark("BackLeftPaw", np.array([0.15, 0.02, -0.05]), "Back left foot", "#ffff40"),
+    "BackRightPaw": Landmark("BackRightPaw", np.array([-0.15, 0.02, -0.05]), "Back right foot", "#ffff40"),
 }
 
 # Humanoid landmarks - 10 key points
@@ -215,18 +217,19 @@ def _add_quadruped_leg_v2(
     paw_top = shoulder_pos + leg_vector * 0.92
 
     # Add slight forward/backward bend to joints for natural pose
+    # Front legs (elbows) bend backward (-Z), back legs (knees) bend forward (+Z)
     if is_front:
-        lower_pos[2] += leg_length * 0.05
+        lower_pos[2] -= leg_length * 0.05  # Elbow bends backward
         parent = "Spine1"
         bone_names = [f"{prefix}Shoulder", f"{prefix}UpperArm", f"{prefix}LowerArm", f"{prefix}Paw", f"{prefix}Toes"]
     else:
-        lower_pos[2] -= leg_length * 0.05
+        lower_pos[2] += leg_length * 0.05  # Knee bends forward
         parent = "Hips"
         bone_names = [f"{prefix}Hip", f"{prefix}UpperLeg", f"{prefix}LowerLeg", f"{prefix}Paw", f"{prefix}Toes"]
 
-    # Toes extend forward from paw
+    # Toes extend forward from paw (+Z is forward)
     toes_end = paw_pos.copy()
-    toes_end[2] -= 0.08
+    toes_end[2] += 0.08  # Forward in +Z direction
     toes_end[1] = paw_pos[1]
 
     _create_bone(bone_names[0], parent, shoulder_pos, upper_pos, bones_by_name)
@@ -321,8 +324,9 @@ def _add_humanoid_leg_v2(
     _create_bone(f"{side}Leg", f"{side}UpLeg", upper_leg_end, lower_leg_end, bones_by_name, connected=True)
     _create_bone(f"{side}Foot", f"{side}Leg", lower_leg_end, foot, bones_by_name, connected=True)
 
+    # Toes extend forward (+Z is forward)
     toes_end = foot.copy()
-    toes_end[2] -= 0.1
+    toes_end[2] += 0.1  # Forward in +Z direction
     toes_end[1] = foot[1]
     _create_bone(f"{side}ToeBase", f"{side}Foot", foot, toes_end, bones_by_name, connected=True)
 

@@ -35,6 +35,10 @@ export function AnimationTimeline() {
     pause,
     stop,
     seek,
+    // Embedded animation state
+    embeddedAnimations,
+    activeEmbeddedName,
+    setActiveEmbeddedName,
   } = useAnimationStore();
 
   const {
@@ -93,10 +97,19 @@ export function AnimationTimeline() {
     setIsGeneratingSkinnedPreview,
   ]);
 
-  // Get active clip duration
+  // Get active clip/animation info based on mode
   const activeClip = clips.find((c) => c.id === activeClipId);
-  const duration = activeClip?.duration || 4.0;
+  const activeEmbedded = embeddedAnimations.find((a) => a.name === activeEmbeddedName);
+
+  // Duration depends on mode
+  const duration = isSkinnedPreview
+    ? (activeEmbedded?.duration || 4.0)
+    : (activeClip?.duration || 4.0);
+
   const loopMode = activeClip?.loop_mode || 'loop';
+  const currentAnimationName = isSkinnedPreview
+    ? activeEmbeddedName
+    : activeClip?.name;
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -105,7 +118,10 @@ export function AnimationTimeline() {
     return `${mins}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
   };
 
-  if (!activeClipId || clips.length === 0) {
+  // Show timeline if we have clips OR if we're in skinned preview with embedded animations
+  const hasContent = (clips.length > 0 && activeClipId) || (isSkinnedPreview && embeddedAnimations.length > 0);
+
+  if (!hasContent) {
     return null;
   }
 
@@ -150,6 +166,33 @@ export function AnimationTimeline() {
         )}
       </div>
 
+      {/* Embedded Animation Selector (when in skinned preview mode) */}
+      {isSkinnedPreview && embeddedAnimations.length > 0 && (
+        <div className="mb-4">
+          <label className="block text-xs text-gray-400 mb-2">
+            Select Animation ({embeddedAnimations.length} available)
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {embeddedAnimations.map((anim) => (
+              <button
+                key={anim.name}
+                onClick={() => setActiveEmbeddedName(anim.name)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  activeEmbeddedName === anim.name
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                {anim.name}
+                <span className="ml-1 text-gray-400">
+                  ({anim.duration.toFixed(1)}s)
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Transport Controls */}
       <div className="flex items-center justify-center gap-4 mb-4">
         {/* Stop */}
@@ -181,12 +224,14 @@ export function AnimationTimeline() {
           )}
         </button>
 
-        {/* Loop mode indicator */}
-        <div className="text-xs text-gray-400 capitalize">
-          {loopMode === 'loop' && '🔁 Loop'}
-          {loopMode === 'once' && '1️⃣ Once'}
-          {loopMode === 'pingpong' && '↔️ Ping-pong'}
-        </div>
+        {/* Loop mode indicator (only for non-embedded) */}
+        {!isSkinnedPreview && (
+          <div className="text-xs text-gray-400 capitalize">
+            {loopMode === 'loop' && '🔁 Loop'}
+            {loopMode === 'once' && '1️⃣ Once'}
+            {loopMode === 'pingpong' && '↔️ Ping-pong'}
+          </div>
+        )}
       </div>
 
       {/* Timeline Slider */}
@@ -214,10 +259,13 @@ export function AnimationTimeline() {
         </span>
       </div>
 
-      {/* Active clip name */}
-      <div className="text-center text-xs text-gray-500 mt-2">
-        Playing: {activeClip?.name}
-      </div>
+      {/* Active animation name */}
+      {currentAnimationName && (
+        <div className="text-center text-xs text-gray-500 mt-2">
+          {isPlaying ? 'Playing' : 'Selected'}: {currentAnimationName}
+          {isSkinnedPreview && <span className="ml-2 text-green-400">(Skinned Preview)</span>}
+        </div>
+      )}
     </div>
   );
 }

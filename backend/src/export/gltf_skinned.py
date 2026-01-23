@@ -216,7 +216,8 @@ class GLTFSkinnedExporter:
             logger.info("Mesh already grounded or no vertices found")
             return 0.0
 
-        y_offset = -min_y
+        # Convert to Python float to avoid numpy serialization issues
+        y_offset = float(-min_y)
         logger.info(f"Grounding mesh: min_y={min_y:.4f}, applying offset={y_offset:.4f}")
 
         # Apply offset to all mesh vertex positions
@@ -243,23 +244,25 @@ class GLTFSkinnedExporter:
                 self.additional_data[start:start + vertex_count * 12] = pos_data.tobytes()
 
                 # Update accessor min/max if present
+                # Convert to Python float to avoid numpy serialization issues
                 if pos_accessor.min is not None and len(pos_accessor.min) >= 2:
-                    pos_accessor.min[1] += y_offset
+                    pos_accessor.min[1] = float(pos_accessor.min[1] + y_offset)
                 if pos_accessor.max is not None and len(pos_accessor.max) >= 2:
-                    pos_accessor.max[1] += y_offset
+                    pos_accessor.max[1] = float(pos_accessor.max[1] + y_offset)
 
         # Adjust skeleton bone positions by the same offset
+        # Convert to Python floats to avoid numpy serialization issues
         for bone in skeleton.bones:
             bone.head_position = (
-                bone.head_position[0],
-                bone.head_position[1] + y_offset,
-                bone.head_position[2]
+                float(bone.head_position[0]),
+                float(bone.head_position[1] + y_offset),
+                float(bone.head_position[2])
             )
             if bone.tail_position:
                 bone.tail_position = (
-                    bone.tail_position[0],
-                    bone.tail_position[1] + y_offset,
-                    bone.tail_position[2]
+                    float(bone.tail_position[0]),
+                    float(bone.tail_position[1] + y_offset),
+                    float(bone.tail_position[2])
                 )
 
         logger.info(f"Grounded {len(skeleton.bones)} bone positions")
@@ -291,7 +294,8 @@ class GLTFSkinnedExporter:
         for bone in skeleton.bones:
             node = Node(name=bone.name)
             # Set bone position (in world space initially)
-            node.translation = list(bone.head_position)
+            # Convert to Python floats to avoid numpy serialization issues
+            node.translation = [float(x) for x in bone.head_position]
 
             node_idx = len(self.gltf.nodes)
             self.gltf.nodes.append(node)
@@ -312,7 +316,8 @@ class GLTFSkinnedExporter:
                 parent_pos = np.array(parent_bone.head_position)
                 child_pos = np.array(bone.head_position)
                 local_pos = child_pos - parent_pos
-                self.gltf.nodes[child_idx].translation = local_pos.tolist()
+                # Convert to Python floats to avoid numpy serialization issues
+                self.gltf.nodes[child_idx].translation = [float(x) for x in local_pos]
 
         logger.info(f"Created {len(skeleton.bones)} bone nodes starting at index {node_start_idx}")
         return self.bone_node_indices[root_bones[0].name]
