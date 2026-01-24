@@ -87,6 +87,10 @@ export interface Asset {
   hasLod: boolean;
   hasTexture: boolean;
   isRigged?: boolean;
+  characterType?: string;
+  hasAnimations?: boolean;
+  animationCount?: number;
+  riggingData?: Record<string, unknown>;
   lodLevels?: number[];
   isFavorite: boolean;
   rating?: number;

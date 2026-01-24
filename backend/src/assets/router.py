@@ -12,7 +12,7 @@ from sqlalchemy.future import select
 
 from src.config import settings
 from src.database import get_session
-from src.generation.models import Asset, Tag, asset_tags, AssetStatus, GenerationType
+from src.generation.models import Asset, Tag, asset_tags, AssetStatus, GenerationType, AnimationClip
 from src.assets.schemas import (
     AssetListResponse,
     AssetResponse,
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def asset_to_response(asset: Asset) -> AssetResponse:
+def asset_to_response(asset: Asset, animation_count: int = 0) -> AssetResponse:
     """Convert Asset ORM model to response schema."""
     return AssetResponse(
         id=asset.id,
@@ -46,12 +46,19 @@ def asset_to_response(asset: Asset) -> AssetResponse:
         generation_time_seconds=asset.generation_time_seconds,
         status=asset.status.value if asset.status else "pending",
         has_lod=asset.has_lod or False,
+        has_texture=asset.has_texture or False,
         lod_levels=asset.lod_levels,
         is_favorite=asset.is_favorite or False,
         rating=asset.rating,
         tags=[TagResponse(id=t.id, name=t.name, color=t.color) for t in asset.tags],
         created_at=asset.created_at,
         updated_at=asset.updated_at,
+        # Rigging and animation fields
+        is_rigged=asset.is_rigged or False,
+        character_type=asset.character_type,
+        has_animations=asset.has_animations or False,
+        animation_count=animation_count,
+        rigging_data=asset.rigging_data,
     )
 
 
@@ -123,8 +130,21 @@ async def list_assets(
         result = await db.execute(query)
         assets = result.scalars().unique().all()
 
+        # Get animation counts for all assets in one query
+        asset_ids = [a.id for a in assets]
+        if asset_ids:
+            anim_count_query = (
+                select(AnimationClip.asset_id, func.count(AnimationClip.id).label('count'))
+                .where(AnimationClip.asset_id.in_(asset_ids))
+                .group_by(AnimationClip.asset_id)
+            )
+            anim_result = await db.execute(anim_count_query)
+            anim_counts = {row[0]: row[1] for row in anim_result.all()}
+        else:
+            anim_counts = {}
+
         return AssetListResponse(
-            assets=[asset_to_response(a) for a in assets],
+            assets=[asset_to_response(a, anim_counts.get(a.id, 0)) for a in assets],
             total=total,
             page=page,
             page_size=page_size,
@@ -198,7 +218,13 @@ async def get_asset(
     if not asset:
         raise HTTPException(404, "Asset not found")
 
-    return asset_to_response(asset)
+    # Get animation count
+    anim_count_result = await db.execute(
+        select(func.count(AnimationClip.id)).where(AnimationClip.asset_id == asset_id)
+    )
+    animation_count = anim_count_result.scalar() or 0
+
+    return asset_to_response(asset, animation_count)
 
 
 @router.patch("/{asset_id}", response_model=AssetResponse)

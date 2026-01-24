@@ -2,16 +2,19 @@
  * AssetDetails Component - Asset information and actions sidebar
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useLibraryStore } from '../../stores/libraryStore';
 import { useViewerStore } from '../../stores/viewerStore';
 import { useUIStore } from '../../stores/uiStore';
+import { useRiggingStore, type SkeletonData } from '../../stores/riggingStore';
+import { useAnimationStore, type AnimationClip } from '../../stores/animationStore';
 import {
   updateAsset,
   deleteAsset as deleteAssetApi,
   getAssetModelUrl,
   getAssetDownloadUrl,
 } from '../../services/api/assets';
+import { getAssetAnimations } from '../../services/api/animation';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
@@ -19,6 +22,32 @@ import { Card } from '../ui/Card';
 import { TagSelector } from './TagManager';
 import { cn, formatNumber, formatFileSize, formatDuration, formatRelativeTime } from '../../lib/utils';
 import type { Asset } from '../../types';
+
+// Animation type to emoji mapping
+const ANIMATION_EMOJIS: Record<string, string> = {
+  idle: '🧘',
+  walk: '🚶',
+  run: '🏃',
+  attack: '⚔️',
+  jump: '🦘',
+  die: '💀',
+  sit: '🪑',
+  lie_down: '🛏️',
+  crouch: '🦆',
+  dodge: '💨',
+  wave: '👋',
+  cheer: '🎉',
+  pickup: '🤲',
+  trot: '🐕',
+  gallop: '🏇',
+  tail_wag: '🐕',
+  bite: '🦴',
+  shake: '🐕‍🦺',
+  pounce: '🐱',
+  howl: '🐺',
+  roll_over: '🔄',
+  play_dead: '😵',
+};
 
 interface AssetDetailsProps {
   asset: Asset;
@@ -30,6 +59,8 @@ export function AssetDetails({ asset, onClose, className }: AssetDetailsProps) {
   const { updateAsset: updateAssetInStore, removeAsset } = useLibraryStore();
   const { loadModel } = useViewerStore();
   const { addNotification, openModal } = useUIStore();
+  const { setSkeletonData, setCharacterType } = useRiggingStore();
+  const { setClips } = useAnimationStore();
 
   const [isEditing, setIsEditing] = useState(false);
   const [editedName, setEditedName] = useState(asset.name);
@@ -37,6 +68,28 @@ export function AssetDetails({ asset, onClose, className }: AssetDetailsProps) {
   const [editedTags, setEditedTags] = useState(asset.tags.map((t) => t.id));
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [animations, setAnimations] = useState<AnimationClip[]>([]);
+  const [isLoadingAnimations, setIsLoadingAnimations] = useState(false);
+
+  // Load animations when asset changes and has animations
+  useEffect(() => {
+    if (asset.isRigged && (asset.animationCount ?? 0) > 0) {
+      setIsLoadingAnimations(true);
+      getAssetAnimations(asset.id)
+        .then((clips) => {
+          setAnimations(clips);
+        })
+        .catch((error) => {
+          console.error('Failed to load animations:', error);
+          setAnimations([]);
+        })
+        .finally(() => {
+          setIsLoadingAnimations(false);
+        });
+    } else {
+      setAnimations([]);
+    }
+  }, [asset.id, asset.isRigged, asset.animationCount]);
 
   const handleSave = useCallback(async () => {
     setIsSaving(true);
@@ -107,8 +160,29 @@ export function AssetDetails({ asset, onClose, className }: AssetDetailsProps) {
   }, [asset, updateAssetInStore, addNotification]);
 
   const handleViewInViewer = useCallback(() => {
+    // Load skeleton if rigged - this enables animation playback in ViewerToolbar
+    if (asset.isRigged && asset.riggingData) {
+      try {
+        const skeleton = asset.riggingData as SkeletonData;
+        setSkeletonData(skeleton);
+        if (asset.characterType) {
+          setCharacterType(asset.characterType as 'humanoid' | 'quadruped');
+        }
+        // Pre-load animations into the animation store
+        if (animations.length > 0) {
+          setClips(animations);
+        }
+      } catch (error) {
+        console.error('Failed to load skeleton data:', error);
+      }
+    } else {
+      // Clear skeleton data if not rigged
+      setSkeletonData(null);
+      setClips([]);
+    }
+
     loadModel(getAssetModelUrl(asset.id), asset.id);
-  }, [asset.id, loadModel]);
+  }, [asset, animations, loadModel, setSkeletonData, setCharacterType, setClips]);
 
   const handleExport = useCallback(() => {
     openModal('export', { assetId: asset.id });
@@ -343,6 +417,10 @@ export function AssetDetails({ asset, onClose, className }: AssetDetailsProps) {
             ) : (
               <Badge variant="warning" size="sm">No Texture</Badge>
             )}
+            {asset.isRigged && <Badge variant="success" size="sm">Rigged</Badge>}
+            {(asset.animationCount ?? 0) > 0 && (
+              <Badge variant="primary" size="sm">{asset.animationCount} Anim</Badge>
+            )}
             <Badge variant="default" size="sm">{asset.sourceType.replace('_', ' ')}</Badge>
           </div>
         </Card>
@@ -367,6 +445,60 @@ export function AssetDetails({ asset, onClose, className }: AssetDetailsProps) {
             </div>
           </div>
         </Card>
+
+        {/* Rigging & Animation Info */}
+        {asset.isRigged && (
+          <Card variant="outlined" padding="sm">
+            <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">
+              Rigging & Animation
+            </h4>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between items-center">
+                <span className="text-text-muted">Character Type</span>
+                <Badge variant="success" size="sm">
+                  {asset.characterType || 'Unknown'}
+                </Badge>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-text-muted">Animations</span>
+                <span className="text-text-primary">
+                  {isLoadingAnimations ? (
+                    <span className="text-text-muted">Loading...</span>
+                  ) : (
+                    `${animations.length} clip${animations.length !== 1 ? 's' : ''}`
+                  )}
+                </span>
+              </div>
+            </div>
+
+            {/* Animation List */}
+            {animations.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-border">
+                <div className="space-y-1.5">
+                  {animations.map((clip) => (
+                    <div
+                      key={clip.id}
+                      className="flex items-center justify-between px-2 py-1.5 rounded bg-surface-light"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm">
+                          {ANIMATION_EMOJIS[clip.animationType] || '🎬'}
+                        </span>
+                        <span className="text-sm text-text-primary">{clip.name}</span>
+                      </div>
+                      <span className="text-xs text-text-muted">
+                        {clip.duration.toFixed(1)}s
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-text-muted mt-2">
+                  Click "View" to preview animations in the 3D viewer
+                </p>
+              </div>
+            )}
+          </Card>
+        )}
       </div>
 
       {/* Footer Actions */}

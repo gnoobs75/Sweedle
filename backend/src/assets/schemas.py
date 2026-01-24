@@ -49,6 +49,12 @@ class AssetResponse(BaseModel):
     tags: List[TagResponse] = []
     created_at: datetime
     updated_at: datetime
+    # Rigging and animation fields
+    is_rigged: bool = False
+    character_type: Optional[str] = None
+    has_animations: bool = False
+    animation_count: int = 0
+    rigging_data: Optional[dict] = None
 
     class Config:
         from_attributes = True

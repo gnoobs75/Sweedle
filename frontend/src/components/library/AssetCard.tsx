@@ -5,7 +5,7 @@
 import { useState, useCallback } from 'react';
 import { useViewerStore } from '../../stores/viewerStore';
 import { useLibraryStore } from '../../stores/libraryStore';
-import { getAssetModelUrl, getAssetThumbnailUrl } from '../../services/api/assets';
+import { getAssetModelUrl, getAssetThumbnailUrl, updateAsset } from '../../services/api/assets';
 import { regenerateThumbnail } from '../../services/api/export';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
@@ -35,8 +35,9 @@ export function AssetCard({
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [thumbnailKey, setThumbnailKey] = useState(0); // For forcing reload
   const [isHovered, setIsHovered] = useState(false);
+  const [isTogglingFavorite, setIsTogglingFavorite] = useState(false);
   const { loadModel } = useViewerStore();
-  const { setCurrentAsset } = useLibraryStore();
+  const { setCurrentAsset, updateAsset: updateAssetInStore } = useLibraryStore();
 
   // Cache-busted thumbnail URL
   const baseThumbnailUrl = asset.thumbnailPath || getAssetThumbnailUrl(asset.id);
@@ -76,11 +77,21 @@ export function AssetCard({
   );
 
   const handleFavoriteClick = useCallback(
-    (e: React.MouseEvent) => {
+    async (e: React.MouseEvent) => {
       e.stopPropagation();
-      // TODO: Implement favorite toggle API call
+      if (isTogglingFavorite) return;
+
+      setIsTogglingFavorite(true);
+      try {
+        const updated = await updateAsset(asset.id, { isFavorite: !asset.isFavorite });
+        updateAssetInStore(asset.id, { isFavorite: updated.isFavorite });
+      } catch (error) {
+        console.error('Failed to toggle favorite:', error);
+      } finally {
+        setIsTogglingFavorite(false);
+      }
     },
-    []
+    [asset.id, asset.isFavorite, isTogglingFavorite, updateAssetInStore]
   );
 
   return (
@@ -210,10 +221,20 @@ export function AssetCard({
         </button>
 
         {/* Status badges */}
-        <div className="absolute bottom-2 left-2 flex gap-1">
+        <div className="absolute bottom-2 left-2 flex gap-1 flex-wrap max-w-[calc(100%-1rem)]">
           {asset.hasLod && (
             <Badge variant="info" size="sm">
               LOD
+            </Badge>
+          )}
+          {asset.isRigged && (
+            <Badge variant="success" size="sm">
+              Rigged
+            </Badge>
+          )}
+          {(asset.animationCount ?? 0) > 0 && (
+            <Badge variant="primary" size="sm">
+              {asset.animationCount} {asset.animationCount === 1 ? 'Anim' : 'Anims'}
             </Badge>
           )}
           {asset.status === 'pending' && (
@@ -374,10 +395,14 @@ export function AssetListItem({
             </svg>
           )}
         </div>
-        <div className="flex items-center gap-3 mt-0.5 text-xs text-text-muted">
+        <div className="flex items-center gap-2 mt-0.5 text-xs text-text-muted flex-wrap">
           <span>{asset.faceCount ? `${formatNumber(asset.faceCount)} faces` : '--'}</span>
           <span>{formatRelativeTime(asset.createdAt)}</span>
           {asset.hasLod && <Badge variant="info" size="sm">LOD</Badge>}
+          {asset.isRigged && <Badge variant="success" size="sm">Rigged</Badge>}
+          {(asset.animationCount ?? 0) > 0 && (
+            <Badge variant="primary" size="sm">{asset.animationCount} Anim</Badge>
+          )}
         </div>
       </div>
 
