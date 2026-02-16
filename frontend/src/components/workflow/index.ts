@@ -6,3 +6,4 @@ export { WorkflowWizard } from './WorkflowWizard';
 export { WorkflowStepper } from './WorkflowStepper';
 export { ApprovalControls } from './ApprovalControls';
 export { VRAMIndicator } from './VRAMIndicator';
+export { TemplateSelector } from './TemplateSelector';

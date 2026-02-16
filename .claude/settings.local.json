@@ -83,10 +83,24 @@
       "WebFetch(domain:hunyuan3dai.com)",
       "Bash(if exist backenddatasweedle.db del backenddatasweedle.db)",
       "Bash(venvScriptspython.exe:*)",
-"Bash(grep:*)",
+      "Bash(grep:*)",
       "Bash(git checkout:*)",
       "Bash(git fetch:*)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(C:ClaudeSweedlebackendvenvScriptspython.exe -c \"from hy3dgen.texgen import Hunyuan3DPaintPipeline; import inspect; print\\(inspect.signature\\(Hunyuan3DPaintPipeline.__call__\\)\\)\")",
+      "Bash(cmd /c:*)",
+      "Bash(Get-Content \"C:\\\\Claude\\\\Sweedle\\\\backend\\\\sweedle.log\" -Tail 100)",
+      "Bash(ls:*)",
+      "Bash(venv/Scripts/python.exe:*)",
+      "Bash(wc:*)",
+      "Bash(del \"C:\\\\Claude\\\\Sweedle\\\\frontend\\\\src\\\\services\\\\api\\\\mixamo.ts\" \"C:\\\\Claude\\\\Sweedle\\\\frontend\\\\src\\\\components\\\\animation\\\\MixamoUpload.tsx\" \"C:\\\\Claude\\\\Sweedle\\\\backend\\\\src\\\\animation\\\\mixamo_mapping.py\" \"C:\\\\Claude\\\\Sweedle\\\\backend\\\\src\\\\animation\\\\fbx_parser.py\" \"C:\\\\Claude\\\\Sweedle\\\\backend\\\\src\\\\animation\\\\retargeting.py\")",
+      "Bash(npm run dev:*)",
+      "Skill(ralph-wiggum:ralph-loop)",
+      "Bash(Remove-Item -Path \"C:\\\\Claude\\\\Sweedle\\\\backend\\\\data\\\\sweedle.db\" -Force -ErrorAction SilentlyContinue)",
+      "Bash(Write-Host \"Database deleted - will be recreated on next startup\")",
+      "Bash(npx:*)",
+      "Bash(powershell.exe -Command \"cd C:\\\\Claude\\\\Sweedle\\\\frontend; npx tsc --noEmit --pretty 2>&1 | Select-Object -First 50\")",
+      "Bash(powershell.exe -Command \"cd C:\\\\Claude\\\\Sweedle\\\\frontend; npx tsc --noEmit --pretty 2>&1 | Select-Object -First 20\")"
     ]
   }
 }

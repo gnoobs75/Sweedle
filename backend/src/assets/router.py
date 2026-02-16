@@ -1,9 +1,12 @@
 """Assets API router."""
 
 import logging
+import shutil
+import uuid
+from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import desc, asc, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +21,7 @@ from src.assets.schemas import (
     AssetResponse,
     AssetUpdate,
     BulkDeleteRequest,
+    ImportModelResponse,
     TagCreate,
     TagListResponse,
     TagResponse,
@@ -59,6 +63,8 @@ def asset_to_response(asset: Asset, animation_count: int = 0) -> AssetResponse:
         has_animations=asset.has_animations or False,
         animation_count=animation_count,
         rigging_data=asset.rigging_data,
+        # Folder organization
+        folder_id=asset.folder_id,
     )
 
 
@@ -71,6 +77,8 @@ async def list_assets(
     source_type: Optional[str] = None,
     has_lod: Optional[bool] = None,
     is_favorite: Optional[bool] = None,
+    folder_id: Optional[int] = None,
+    root_only: bool = Query(False, description="Show only assets without folder"),
     sort_by: str = Query("created", pattern="^(created|name|size|rating)$"),
     sort_order: str = Query("desc", pattern="^(asc|desc)$"),
     db: AsyncSession = Depends(get_session),
@@ -106,6 +114,14 @@ async def list_assets(
         if is_favorite is not None:
             query = query.where(Asset.is_favorite == is_favorite)
             count_query = count_query.where(Asset.is_favorite == is_favorite)
+
+        # Folder filtering
+        if folder_id is not None:
+            query = query.where(Asset.folder_id == folder_id)
+            count_query = count_query.where(Asset.folder_id == folder_id)
+        elif root_only:
+            query = query.where(Asset.folder_id.is_(None))
+            count_query = count_query.where(Asset.folder_id.is_(None))
 
         # Apply sorting
         sort_column_map = {
@@ -381,3 +397,125 @@ async def remove_tag_from_asset(
         await db.flush()
 
     return {"message": "Tag removed", "asset_id": asset_id, "tag_id": tag_id}
+
+
+@router.post("/import", response_model=ImportModelResponse)
+async def import_model(
+    file: UploadFile = File(..., description="3D model file (GLB, FBX, OBJ, GLTF)"),
+    name: Optional[str] = Form(None, description="Asset name"),
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    Import an existing 3D model for rigging and animation.
+
+    Supported formats: GLB, GLTF, FBX, OBJ
+
+    The imported model will be available in the library and can be
+    rigged and animated like generated models.
+    """
+    try:
+        # Validate file extension
+        if not file.filename:
+            raise HTTPException(400, "No filename provided")
+
+        ext = Path(file.filename).suffix.lower()
+        valid_extensions = {".glb", ".gltf", ".fbx", ".obj"}
+        if ext not in valid_extensions:
+            raise HTTPException(
+                400,
+                f"Unsupported file format: {ext}. Supported: {', '.join(valid_extensions)}"
+            )
+
+        # Generate asset ID and create directory
+        asset_id = str(uuid.uuid4())
+        asset_dir = settings.GENERATED_DIR / asset_id
+        asset_dir.mkdir(parents=True, exist_ok=True)
+
+        # Determine output filename (always use GLB for internal storage)
+        output_filename = f"{asset_id}{ext}"
+        output_path = asset_dir / output_filename
+
+        # Save uploaded file
+        contents = await file.read()
+        with open(output_path, "wb") as f:
+            f.write(contents)
+
+        # Extract mesh info using trimesh
+        import trimesh
+        try:
+            mesh = trimesh.load(str(output_path), force='mesh')
+            if isinstance(mesh, trimesh.Scene):
+                # Combine all geometries in the scene
+                mesh = mesh.dump(concatenate=True)
+
+            vertex_count = len(mesh.vertices) if hasattr(mesh, 'vertices') else 0
+            face_count = len(mesh.faces) if hasattr(mesh, 'faces') else 0
+            has_texture = bool(mesh.visual.material if hasattr(mesh, 'visual') else False)
+
+        except Exception as mesh_err:
+            logger.warning(f"Could not parse mesh info: {mesh_err}")
+            vertex_count = 0
+            face_count = 0
+            has_texture = False
+
+        # Generate thumbnail
+        thumbnail_path = None
+        try:
+            from src.export.thumbnail_generator import ThumbnailGenerator, ThumbnailSettings
+            generator = ThumbnailGenerator()
+            settings_obj = ThumbnailSettings(width=512, height=512, format="png")
+            result = await generator.generate(output_path, settings=settings_obj)
+            if result.success and result.thumbnail_path:
+                thumbnail_path = str(result.thumbnail_path)
+        except Exception as thumb_err:
+            logger.warning(f"Thumbnail generation failed: {thumb_err}")
+
+        # Create asset name
+        asset_name = name or Path(file.filename).stem
+
+        # Create asset record
+        asset = Asset(
+            id=asset_id,
+            name=asset_name,
+            source_type=GenerationType.IMAGE_TO_3D,  # Use image_to_3d as closest match
+            file_path=str(output_path),
+            thumbnail_path=thumbnail_path,
+            vertex_count=vertex_count,
+            face_count=face_count,
+            file_size_bytes=len(contents),
+            status=AssetStatus.COMPLETED,
+            has_texture=has_texture,
+        )
+
+        db.add(asset)
+        await db.commit()
+        await db.refresh(asset)
+
+        logger.info(f"Imported model {asset_id}: {asset_name} ({vertex_count} verts, {face_count} faces)")
+
+        return ImportModelResponse(
+            success=True,
+            asset_id=asset_id,
+            name=asset_name,
+            file_path=str(output_path),
+            vertex_count=vertex_count,
+            face_count=face_count,
+            has_texture=has_texture,
+            message=f"Successfully imported {asset_name}",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Model import failed: {e}")
+        return ImportModelResponse(
+            success=False,
+            asset_id="",
+            name=name or "",
+            file_path="",
+            vertex_count=0,
+            face_count=0,
+            has_texture=False,
+            message="Import failed",
+            error=str(e),
+        )

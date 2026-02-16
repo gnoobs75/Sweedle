@@ -97,6 +97,7 @@ export interface Asset {
   tags: Tag[];
   createdAt: string;
   updatedAt: string;
+  folderId?: number;
 }
 
 export interface Tag {

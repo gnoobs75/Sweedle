@@ -147,20 +147,31 @@ function LandmarkConnections({
 }: {
   landmarks: Record<string, [number, number, number]>;
 }) {
-  // Define connections for quadruped
+  // Define connections for both character types - filter handles which exist
   const connections: Array<[string, string]> = [
-    // Body
+    // Body (shared)
     ['Hips', 'Chest'],
-    // Head
     ['Chest', 'Head'],
-    // Tail
+    // Quadruped legs (body -> knee -> paw)
     ['Hips', 'TailTip'],
-    // Front legs
-    ['Chest', 'FrontLeftPaw'],
-    ['Chest', 'FrontRightPaw'],
-    // Back legs
-    ['Hips', 'BackLeftPaw'],
-    ['Hips', 'BackRightPaw'],
+    ['Chest', 'FrontLeftKnee'],
+    ['FrontLeftKnee', 'FrontLeftPaw'],
+    ['Chest', 'FrontRightKnee'],
+    ['FrontRightKnee', 'FrontRightPaw'],
+    ['Hips', 'BackLeftKnee'],
+    ['BackLeftKnee', 'BackLeftPaw'],
+    ['Hips', 'BackRightKnee'],
+    ['BackRightKnee', 'BackRightPaw'],
+    // Humanoid arms (chest -> elbow -> hand)
+    ['Chest', 'LeftElbow'],
+    ['LeftElbow', 'LeftHand'],
+    ['Chest', 'RightElbow'],
+    ['RightElbow', 'RightHand'],
+    // Humanoid legs (hips -> knee -> foot)
+    ['Hips', 'LeftKnee'],
+    ['LeftKnee', 'LeftFoot'],
+    ['Hips', 'RightKnee'],
+    ['RightKnee', 'RightFoot'],
   ];
 
   const lines = connections

@@ -31,6 +31,7 @@ export function AnimationTimeline() {
     currentTime,
     clips,
     activeClipId,
+    setActiveClip,
     play,
     pause,
     stop,
@@ -75,7 +76,8 @@ export function AnimationTimeline() {
 
       if (result.success && result.outputPath) {
         // Convert path to URL
-        const previewUrl = `${getStorageBase()}${result.outputPath.replace(/\\/g, '/')}?t=${Date.now()}`;
+        const pathPart = result.outputPath.replace(/\\/g, '/');
+        const previewUrl = `${getStorageBase()}/${pathPart.replace(/^\//, '')}?t=${Date.now()}`;
         setSkinnedPreviewUrl(previewUrl);
         setIsSkinnedPreview(true);
         console.log('Skinned preview enabled:', previewUrl);
@@ -165,6 +167,33 @@ export function AnimationTimeline() {
           <span className="text-xs text-red-400">{previewError}</span>
         )}
       </div>
+
+      {/* Clip Selector (when NOT in skinned preview mode and multiple clips exist) */}
+      {!isSkinnedPreview && clips.length > 1 && (
+        <div className="mb-4">
+          <label className="block text-xs text-gray-400 mb-2">
+            Select Animation ({clips.length} available)
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {clips.map((clip) => (
+              <button
+                key={clip.id}
+                onClick={() => setActiveClip(clip.id)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  activeClipId === clip.id
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                {clip.name}
+                <span className="ml-1 text-gray-400">
+                  ({clip.duration.toFixed(1)}s)
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Embedded Animation Selector (when in skinned preview mode) */}
       {isSkinnedPreview && embeddedAnimations.length > 0 && (

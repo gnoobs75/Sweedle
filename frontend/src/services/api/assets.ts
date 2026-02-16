@@ -13,7 +13,7 @@ function isTauri(): boolean {
 }
 
 // Storage base URL - in Tauri, use localhost directly
-function getStorageBase(): string {
+export function getStorageBase(): string {
   return isTauri() ? 'http://localhost:8001' : '';
 }
 
@@ -25,6 +25,7 @@ interface ListAssetsParams {
   sourceType?: 'all' | 'image_to_3d' | 'text_to_3d';
   hasLod?: boolean;
   isFavorite?: boolean;
+  folderId?: number;
   sortBy?: 'created' | 'name' | 'size' | 'rating';
   sortOrder?: 'asc' | 'desc';
 }
@@ -35,6 +36,27 @@ interface UpdateAssetParams {
   isFavorite?: boolean;
   rating?: number;
   tags?: number[];
+}
+
+// Transform snake_case rigging data from backend to camelCase SkeletonData
+function transformRiggingData(raw: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!raw || !Array.isArray(raw.bones)) return raw;
+
+  return {
+    rootBone: raw.root_bone ?? raw.rootBone,
+    bones: (raw.bones as Array<Record<string, unknown>>).map((b) => ({
+      name: b.name,
+      parent: b.parent,
+      headPosition: b.head_position ?? b.headPosition ?? [0, 0, 0],
+      tailPosition: b.tail_position ?? b.tailPosition ?? [0, 0, 0],
+      rotation: b.rotation || [0, 0, 0, 1],
+      scale: b.scale || [1, 1, 1],
+      connected: b.connected ?? false,
+      deform: b.deform ?? true,
+    })),
+    characterType: raw.character_type ?? raw.characterType,
+    boneCount: raw.bone_count ?? raw.boneCount,
+  };
 }
 
 // Transform API response to frontend Asset type
@@ -60,7 +82,7 @@ function transformAsset(data: Record<string, unknown>): Asset {
     characterType: data.character_type as string | undefined,
     hasAnimations: data.has_animations as boolean | undefined,
     animationCount: data.animation_count as number | undefined,
-    riggingData: data.rigging_data as Record<string, unknown> | undefined,
+    riggingData: transformRiggingData(data.rigging_data as Record<string, unknown> | undefined),
     lodLevels: data.lod_levels as number[] | undefined,
     isFavorite: data.is_favorite as boolean,
     rating: data.rating as number | undefined,
@@ -73,6 +95,7 @@ function transformAsset(data: Record<string, unknown>): Asset {
     ),
     createdAt: data.created_at as string,
     updatedAt: data.updated_at as string,
+    folderId: data.folder_id as number | undefined,
   };
 }
 
@@ -94,6 +117,9 @@ export async function listAssets(
   if (params.hasLod !== undefined) queryParams.set('has_lod', String(params.hasLod));
   if (params.isFavorite !== undefined) {
     queryParams.set('is_favorite', String(params.isFavorite));
+  }
+  if (params.folderId !== undefined) {
+    queryParams.set('folder_id', String(params.folderId));
   }
   if (params.sortBy) queryParams.set('sort_by', params.sortBy);
   if (params.sortOrder) queryParams.set('sort_order', params.sortOrder);
@@ -237,4 +263,54 @@ export async function removeTagFromAsset(
   tagId: number
 ): Promise<void> {
   await apiClient.delete(`/assets/${assetId}/tags/${tagId}`);
+}
+
+/**
+ * Import an existing 3D model
+ */
+export interface ImportModelResult {
+  success: boolean;
+  assetId: string;
+  name: string;
+  filePath: string;
+  vertexCount: number;
+  faceCount: number;
+  hasTexture: boolean;
+  message: string;
+  error?: string;
+}
+
+export async function importModel(
+  file: File,
+  name?: string
+): Promise<ImportModelResult> {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (name) {
+    formData.append('name', name);
+  }
+
+  const response = await apiClient.post<{
+    success: boolean;
+    asset_id: string;
+    name: string;
+    file_path: string;
+    vertex_count: number;
+    face_count: number;
+    has_texture: boolean;
+    message: string;
+    error?: string;
+  }>('/assets/import', formData);
+
+  return {
+    success: response.success,
+    assetId: response.asset_id,
+    name: response.name,
+    filePath: response.file_path,
+    vertexCount: response.vertex_count,
+    faceCount: response.face_count,
+    hasTexture: response.has_texture,
+    message: response.message,
+    error: response.error,
+  };
 }

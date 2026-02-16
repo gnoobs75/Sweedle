@@ -132,6 +132,25 @@ class GenerateThumbnailResponse(BaseModel):
     error: Optional[str] = None
 
 
+class ConvertFormatRequest(BaseModel):
+    asset_id: str
+    target_format: str = Field(
+        description="Target format (stl, obj, ply, off)",
+        pattern="^(stl|obj|ply|off)$"
+    )
+    binary: bool = Field(default=True, description="Use binary format if available")
+
+
+class ConvertFormatResponse(BaseModel):
+    success: bool
+    asset_id: str
+    original_format: str
+    target_format: str
+    output_path: Optional[str] = None
+    file_size_bytes: int = 0
+    error: Optional[str] = None
+
+
 class ExportToEngineRequest(BaseModel):
     asset_id: str
     engine: str = Field(description="Target engine (unity, unreal, godot)")
@@ -181,7 +200,7 @@ async def get_asset_path(asset_id: str) -> Path:
     """Get the file path for an asset by ID"""
     # TODO: Replace with actual asset service lookup
     from ..config import settings
-    asset_dir = Path(settings.storage_path) / "generated" / asset_id
+    asset_dir = Path(settings.STORAGE_ROOT) / "generated" / asset_id
 
     # Find GLB file
     glb_files = list(asset_dir.glob("*.glb"))
@@ -554,5 +573,80 @@ async def export_skinned_glb(request: ExportSkinnedGLBRequest):
         return ExportSkinnedGLBResponse(
             success=False,
             asset_id=request.asset_id,
+            error=str(e),
+        )
+
+
+@router.post("/convert-format", response_model=ConvertFormatResponse)
+async def convert_format(request: ConvertFormatRequest):
+    """
+    Convert an asset to a different 3D format.
+
+    Supported formats:
+    - STL: Standard Tessellation Language (3D printing, CAD)
+    - OBJ: Wavefront OBJ (universal mesh format)
+    - PLY: Polygon File Format (point clouds, scans)
+    - OFF: Object File Format (simple mesh format)
+
+    Note: Texture and material data may be lost during conversion
+    depending on the target format.
+    """
+    import trimesh
+
+    try:
+        asset_path = await get_asset_path(request.asset_id)
+        original_format = asset_path.suffix.lower().lstrip('.')
+
+        # Load mesh
+        mesh = trimesh.load(str(asset_path), force='mesh')
+        if isinstance(mesh, trimesh.Scene):
+            mesh = mesh.dump(concatenate=True)
+
+        # Create output directory
+        output_dir = Path(settings.STORAGE_ROOT) / "exports" / request.asset_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Determine output path
+        output_filename = f"{request.asset_id}.{request.target_format}"
+        output_path = output_dir / output_filename
+
+        # Export based on format
+        if request.target_format == "stl":
+            # STL supports binary option
+            mesh.export(str(output_path), file_type='stl')
+        elif request.target_format == "obj":
+            mesh.export(str(output_path), file_type='obj')
+        elif request.target_format == "ply":
+            mesh.export(str(output_path), file_type='ply')
+        elif request.target_format == "off":
+            mesh.export(str(output_path), file_type='off')
+        else:
+            raise HTTPException(400, f"Unsupported format: {request.target_format}")
+
+        # Get file size
+        file_size = output_path.stat().st_size
+
+        logger.info(
+            f"Converted asset {request.asset_id} from {original_format} to {request.target_format}"
+        )
+
+        return ConvertFormatResponse(
+            success=True,
+            asset_id=request.asset_id,
+            original_format=original_format,
+            target_format=request.target_format,
+            output_path=str(output_path),
+            file_size_bytes=file_size,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Format conversion failed: {e}", exc_info=True)
+        return ConvertFormatResponse(
+            success=False,
+            asset_id=request.asset_id,
+            original_format="",
+            target_format=request.target_format,
             error=str(e),
         )

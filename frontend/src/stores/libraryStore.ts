@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Asset, Tag, ViewMode } from '../types';
+import type { Folder, FolderWithChildren } from '../services/api/folders';
 
 interface LibraryFilters {
   search: string;
@@ -12,6 +13,7 @@ interface LibraryFilters {
   sourceType: 'all' | 'image_to_3d' | 'text_to_3d';
   hasLod: boolean | null;
   isFavorite: boolean | null;
+  folderId: number | null; // null means root/all
   sortBy: 'created' | 'name' | 'size' | 'rating';
   sortOrder: 'asc' | 'desc';
 }
@@ -24,6 +26,12 @@ interface LibraryState {
 
   // Tags
   tags: Tag[];
+
+  // Folders
+  folders: FolderWithChildren[];
+  currentFolderId: number | null;
+  folderPath: Folder[]; // Breadcrumb path
+  isFolderSidebarOpen: boolean;
 
   // Filters
   filters: LibraryFilters;
@@ -55,6 +63,13 @@ interface LibraryState {
   addTag: (tag: Tag) => void;
   removeTag: (id: number) => void;
 
+  // Folders
+  setFolders: (folders: FolderWithChildren[]) => void;
+  setCurrentFolder: (folderId: number | null) => void;
+  setFolderPath: (path: Folder[]) => void;
+  toggleFolderSidebar: () => void;
+  setFolderSidebarOpen: (open: boolean) => void;
+
   // Filters
   setFilter: <K extends keyof LibraryFilters>(key: K, value: LibraryFilters[K]) => void;
   setFilters: (filters: Partial<LibraryFilters>) => void;
@@ -77,6 +92,7 @@ const defaultFilters: LibraryFilters = {
   sourceType: 'all',
   hasLod: null,
   isFavorite: null,
+  folderId: null,
   sortBy: 'created',
   sortOrder: 'desc',
 };
@@ -89,6 +105,10 @@ export const useLibraryStore = create<LibraryState>()(
       selectedAssetIds: new Set(),
       currentAssetId: null,
       tags: [],
+      folders: [],
+      currentFolderId: null,
+      folderPath: [],
+      isFolderSidebarOpen: true,
       filters: { ...defaultFilters },
       page: 1,
       pageSize: 20,
@@ -176,6 +196,23 @@ export const useLibraryStore = create<LibraryState>()(
           },
         })),
 
+      // Folder actions
+      setFolders: (folders) => set({ folders }),
+
+      setCurrentFolder: (folderId) =>
+        set((state) => ({
+          currentFolderId: folderId,
+          filters: { ...state.filters, folderId },
+          page: 1,
+        })),
+
+      setFolderPath: (path) => set({ folderPath: path }),
+
+      toggleFolderSidebar: () =>
+        set((state) => ({ isFolderSidebarOpen: !state.isFolderSidebarOpen })),
+
+      setFolderSidebarOpen: (open) => set({ isFolderSidebarOpen: open }),
+
       // Filter actions
       setFilter: (key, value) =>
         set((state) => ({
@@ -210,6 +247,7 @@ export const useLibraryStore = create<LibraryState>()(
       partialize: (state) => ({
         viewMode: state.viewMode,
         pageSize: state.pageSize,
+        isFolderSidebarOpen: state.isFolderSidebarOpen,
         filters: {
           sortBy: state.filters.sortBy,
           sortOrder: state.filters.sortOrder,

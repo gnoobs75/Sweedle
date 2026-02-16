@@ -21,6 +21,8 @@ from src.generation.schemas import (
     QueueStatusResponse,
     TextToImageResponse,
     StylePresetResponse,
+    MultiViewAngle,
+    MultiViewGenerationResponse,
 )
 from src.generation.service import GenerationService
 from src.generation.image_analyzer import analyze_image
@@ -513,5 +515,165 @@ async def add_texture_to_asset(
         asset_id=asset.id,
         status=JobStatus.PENDING,
         message="Texture generation queued",
+        queue_position=queue_status["queue_size"],
+    )
+
+
+@router.post("/multi-view-to-3d", response_model=MultiViewGenerationResponse)
+async def generate_from_multi_view(
+    request: Request,
+    files: list[UploadFile] = File(..., description="Multiple view images (2-6 images)"),
+    angles: str = Form(..., description="Comma-separated view angles (front,back,left,right,etc)"),
+    name: Optional[str] = Form(None, description="Asset name"),
+    inference_steps: int = Form(30, ge=5, le=100),
+    guidance_scale: float = Form(5.5, ge=1.0, le=15.0),
+    octree_resolution: int = Form(256),
+    seed: Optional[int] = Form(None),
+    generate_texture: bool = Form(True),
+    face_count: Optional[int] = Form(None),
+    output_format: str = Form("glb"),
+    mode: str = Form("standard"),
+    priority: str = Form("normal", description="Job priority: low, normal, high"),
+    project_id: Optional[str] = Form(None),
+    tags: Optional[str] = Form(None, description="Comma-separated tags"),
+    service: GenerationService = Depends(get_service),
+):
+    """Submit multiple view images for enhanced 3D generation.
+
+    Multi-view input provides more information about the object, resulting in:
+    - Better geometry accuracy
+    - More consistent textures
+    - Fewer artifacts on unseen sides
+
+    Recommended views:
+    - Minimum: front + back (2 views)
+    - Good: front + back + left + right (4 views)
+    - Best: front + back + left + right + top + bottom (6 views)
+
+    Each image should show the same object from its labeled angle.
+    Images should have consistent lighting and a clean background.
+    """
+    # Validate file count
+    if len(files) < 2:
+        raise HTTPException(400, "Multi-view requires at least 2 images")
+    if len(files) > 6:
+        raise HTTPException(400, "Multi-view supports maximum 6 images")
+
+    # Parse angles
+    angle_list = [a.strip().lower() for a in angles.split(",")]
+    if len(angle_list) != len(files):
+        raise HTTPException(400, f"Number of angles ({len(angle_list)}) must match number of files ({len(files)})")
+
+    # Validate angles
+    valid_angles = {a.value for a in MultiViewAngle}
+    for angle in angle_list:
+        if angle not in valid_angles:
+            raise HTTPException(400, f"Invalid angle: {angle}. Valid angles: {', '.join(valid_angles)}")
+
+    # Validate file types
+    for file in files:
+        if not file.content_type or not file.content_type.startswith("image/"):
+            raise HTTPException(400, f"File {file.filename} must be an image (PNG, JPG, WEBP)")
+
+    # Save all uploaded files
+    upload_paths = []
+    view_data = []
+    for file, angle in zip(files, angle_list):
+        upload_path = await service.save_upload(file)
+        upload_paths.append(str(upload_path))
+        view_data.append({
+            "path": str(upload_path),
+            "angle": angle,
+            "weight": 1.0,
+        })
+
+    # Parse parameters
+    params = GenerationParameters(
+        inference_steps=inference_steps,
+        guidance_scale=guidance_scale,
+        octree_resolution=octree_resolution,
+        seed=seed,
+        generate_texture=generate_texture,
+        face_count=face_count,
+        output_format=OutputFormat(output_format),
+        mode=GenerationMode(mode),
+    )
+
+    # Create asset record
+    asset_name = name or "Multi-View Asset"
+    asset = await service.create_asset(
+        name=asset_name,
+        source_type=GenerationType.IMAGE_TO_3D,
+        source_image_path=upload_paths[0],  # Primary image (usually front)
+        parameters={
+            **params.model_dump(),
+            "multi_view": True,
+            "view_count": len(files),
+            "views": view_data,
+        },
+    )
+
+    # Create job in database
+    job = await service.create_job(
+        asset_id=asset.id,
+        job_type="multi_view_to_3d",
+        payload={
+            "views": view_data,
+            "primary_image_path": upload_paths[0],
+            "asset_id": asset.id,
+            "name": asset_name,
+            "parameters": params.model_dump(),
+            "project_id": project_id,
+            "tags": [t.strip() for t in tags.split(",")] if tags else [],
+        },
+    )
+
+    # Get queue and WebSocket manager
+    queue = get_queue()
+    ws_manager = get_websocket_manager()
+
+    # Parse priority
+    priority_map = {
+        "low": JobPriority.LOW,
+        "normal": JobPriority.NORMAL,
+        "high": JobPriority.HIGH,
+    }
+    job_priority = priority_map.get(priority.lower(), JobPriority.NORMAL)
+
+    # Add to queue
+    await queue.enqueue(
+        job_id=job.id,
+        job_type="multi_view_to_3d",
+        payload={
+            "views": view_data,
+            "primary_image_path": upload_paths[0],
+            "asset_id": asset.id,
+            "name": asset_name,
+            "parameters": params.model_dump(),
+            "project_id": project_id,
+            "tags": [t.strip() for t in tags.split(",")] if tags else [],
+        },
+        priority=job_priority,
+    )
+
+    # Get queue position
+    queue_status = queue.get_status()
+
+    # Send WebSocket notification
+    await ws_manager.send_job_created(
+        job_id=job.id,
+        asset_id=asset.id,
+        job_type="multi_view_to_3d",
+        position=queue_status["queue_size"],
+    )
+
+    logger.info(f"Multi-view generation queued: {len(files)} views for asset {asset.id}")
+
+    return MultiViewGenerationResponse(
+        job_id=job.id,
+        asset_id=asset.id,
+        status="pending",
+        message=f"Multi-view generation queued with {len(files)} views",
+        view_count=len(files),
         queue_position=queue_status["queue_size"],
     )

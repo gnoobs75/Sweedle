@@ -9,7 +9,7 @@ import { Badge } from '../ui/Badge';
 import { BackendStatus } from '../ui/BackendStatus';
 
 export function Header() {
-  const { activePanels, togglePanel } = useUIStore();
+  const { activePanels, activeView, togglePanel, setActiveView } = useUIStore();
   const { queueStatus } = useQueueStore();
 
   return (
@@ -63,9 +63,9 @@ export function Header() {
             </svg>
           </Button>
           <Button
-            variant={activePanels.includes('library') ? 'primary' : 'ghost'}
+            variant={activeView === 'library' ? 'primary' : 'ghost'}
             size="sm"
-            onClick={() => togglePanel('library')}
+            onClick={() => setActiveView(activeView === 'library' ? 'workspace' : 'library')}
             title="Asset Library"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

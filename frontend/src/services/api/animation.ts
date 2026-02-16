@@ -12,6 +12,53 @@ import type {
   LoopMode,
 } from '../../stores/animationStore';
 
+interface RawKeyframeTrack {
+  bone_name: string;
+  times: number[];
+  rotations?: number[][];
+  positions?: number[][];
+  scales?: number[][];
+}
+
+/** Flatten nested keyframe arrays into the flat format expected by Three.js */
+function flattenAnimationTracks(tracks: RawKeyframeTrack[]) {
+  const flat: Array<{
+    bone_name: string;
+    property: 'rotation' | 'position' | 'scale';
+    times: number[];
+    values: number[];
+  }> = [];
+
+  for (const track of tracks) {
+    if (track.rotations && track.rotations.length > 0) {
+      flat.push({
+        bone_name: track.bone_name,
+        property: 'rotation',
+        times: track.times,
+        values: track.rotations.flat(),
+      });
+    }
+    if (track.positions && track.positions.length > 0) {
+      flat.push({
+        bone_name: track.bone_name,
+        property: 'position',
+        times: track.times,
+        values: track.positions.flat(),
+      });
+    }
+    if (track.scales && track.scales.length > 0) {
+      flat.push({
+        bone_name: track.bone_name,
+        property: 'scale',
+        times: track.times,
+        values: track.scales.flat(),
+      });
+    }
+  }
+
+  return flat;
+}
+
 export interface CreateAnimationParams {
   assetId: string;
   presetId: string;
@@ -141,50 +188,8 @@ export async function createAnimation(
     name: string;
     duration: number;
     frame_rate: number;
-    tracks: Array<{
-      bone_name: string;
-      times: number[];
-      rotations?: number[][];
-      positions?: number[][];
-      scales?: number[][];
-    }>;
+    tracks: RawKeyframeTrack[];
   }>(`/animation/clips/${response.id}/data`);
-
-  // Transform tracks to flat format expected by Three.js
-  const flatTracks: Array<{
-    bone_name: string;
-    property: 'rotation' | 'position' | 'scale';
-    times: number[];
-    values: number[];
-    interpolation?: string;
-  }> = [];
-
-  for (const track of keyframeData.tracks) {
-    if (track.rotations && track.rotations.length > 0) {
-      flatTracks.push({
-        bone_name: track.bone_name,
-        property: 'rotation',
-        times: track.times,
-        values: track.rotations.flat(), // Flatten [x,y,z,w] arrays
-      });
-    }
-    if (track.positions && track.positions.length > 0) {
-      flatTracks.push({
-        bone_name: track.bone_name,
-        property: 'position',
-        times: track.times,
-        values: track.positions.flat(), // Flatten [x,y,z] arrays
-      });
-    }
-    if (track.scales && track.scales.length > 0) {
-      flatTracks.push({
-        bone_name: track.bone_name,
-        property: 'scale',
-        times: track.times,
-        values: track.scales.flat(), // Flatten [x,y,z] arrays
-      });
-    }
-  }
 
   return {
     id: response.id,
@@ -200,7 +205,7 @@ export async function createAnimation(
     loop_mode: response.loop_mode as LoopMode,
     createdAt: response.created_at,
     keyframe_data: {
-      tracks: flatTracks,
+      tracks: flattenAnimationTracks(keyframeData.tracks),
       duration: keyframeData.duration,
       frame_rate: keyframeData.frame_rate,
     },
@@ -229,7 +234,7 @@ export async function getAssetAnimations(assetId: string): Promise<AnimationClip
     total: number;
   }>(`/animation/clips/asset/${assetId}`);
 
-  return response.clips.map((c) => ({
+  const clips: AnimationClip[] = response.clips.map((c) => ({
     id: c.id,
     assetId: c.asset_id,
     name: c.name,
@@ -243,6 +248,34 @@ export async function getAssetAnimations(assetId: string): Promise<AnimationClip
     loop_mode: c.loop_mode as LoopMode,
     createdAt: c.created_at,
   }));
+
+  // Fetch keyframe data for each clip so they can be played back
+  const clipsWithData = await Promise.all(
+    clips.map(async (clip) => {
+      try {
+        const keyframeData = await apiClient.get<{
+          name: string;
+          duration: number;
+          frame_rate: number;
+          tracks: RawKeyframeTrack[];
+        }>(`/animation/clips/${clip.id}/data`);
+
+        return {
+          ...clip,
+          keyframe_data: {
+            tracks: flattenAnimationTracks(keyframeData.tracks),
+            duration: keyframeData.duration,
+            frame_rate: keyframeData.frame_rate,
+          },
+        };
+      } catch (err) {
+        console.warn(`Failed to fetch keyframe data for clip ${clip.id}:`, err);
+        return clip;
+      }
+    })
+  );
+
+  return clipsWithData;
 }
 
 /**
@@ -403,6 +436,226 @@ export async function exportWithAnimations(
     animationsEmbedded: response.animations_embedded,
     animationNames: response.animation_names,
     fileSizeBytes: response.file_size_bytes,
+    error: response.error,
+  };
+}
+
+export interface GeneratePreviewParams {
+  clipId: string;
+  width?: number;
+  height?: number;
+  fps?: number;
+  format?: 'gif' | 'webp';
+}
+
+export interface GeneratePreviewResult {
+  success: boolean;
+  clipId: string;
+  previewPath?: string;
+  frameCount: number;
+  durationMs: number;
+  fileSizeBytes: number;
+  error?: string;
+}
+
+/**
+ * Generate an animated preview (GIF/WebP) for an animation clip.
+ */
+export async function generateAnimationPreview(
+  params: GeneratePreviewParams
+): Promise<GeneratePreviewResult> {
+  const response = await apiClient.post<{
+    success: boolean;
+    clip_id: string;
+    preview_path?: string;
+    frame_count: number;
+    duration_ms: number;
+    file_size_bytes: number;
+    error?: string;
+  }>(`/animation/clips/${params.clipId}/preview`, {
+    clip_id: params.clipId,
+    width: params.width || 256,
+    height: params.height || 256,
+    fps: params.fps || 15,
+    format: params.format || 'gif',
+  });
+
+  return {
+    success: response.success,
+    clipId: response.clip_id,
+    previewPath: response.preview_path,
+    frameCount: response.frame_count,
+    durationMs: response.duration_ms,
+    fileSizeBytes: response.file_size_bytes,
+    error: response.error,
+  };
+}
+
+// ============ Animation Retargeting ============
+
+export interface BoneMapping {
+  sourceBone: string;
+  targetBone: string;
+  scaleFactor?: number;
+}
+
+export type RetargetingPreset =
+  | 'mixamo_to_standard'
+  | 'standard_to_mixamo'
+  | 'blender_to_standard'
+  | 'standard_to_blender'
+  | 'unity_to_standard'
+  | 'standard_to_unity'
+  | 'auto_detect';
+
+export interface RetargetingPresetInfo {
+  id: RetargetingPreset;
+  name: string;
+  description: string;
+  sourceType: string;
+  targetType: string;
+  mappingsCount: number;
+}
+
+export interface BoneMappingSuggestion {
+  sourceBone: string;
+  targetBone: string;
+  confidence: number;
+  reason: string;
+}
+
+export interface MappingSuggestionsResponse {
+  success: boolean;
+  sourceBones: string[];
+  targetBones: string[];
+  suggestions: BoneMappingSuggestion[];
+  unmappedSource: string[];
+  unmappedTarget: string[];
+  message: string;
+}
+
+export interface RetargetAnimationParams {
+  sourceClipId: string;
+  targetAssetId: string;
+  name?: string;
+  preset?: RetargetingPreset;
+  customMappings?: BoneMapping[];
+  adjustProportions?: boolean;
+  preserveRootMotion?: boolean;
+}
+
+export interface RetargetAnimationResponse {
+  success: boolean;
+  clipId?: string;
+  sourceBonesMapped: number;
+  targetBonesAffected: number;
+  unmappedBones: string[];
+  warnings: string[];
+  message: string;
+  error?: string;
+}
+
+/**
+ * List available retargeting presets
+ */
+export async function listRetargetingPresets(): Promise<RetargetingPresetInfo[]> {
+  const response = await apiClient.get<Array<{
+    id: string;
+    name: string;
+    description: string;
+    source_type: string;
+    target_type: string;
+    mappings_count: number;
+  }>>('/animation/retargeting/presets');
+
+  return response.map(p => ({
+    id: p.id as RetargetingPreset,
+    name: p.name,
+    description: p.description,
+    sourceType: p.source_type,
+    targetType: p.target_type,
+    mappingsCount: p.mappings_count,
+  }));
+}
+
+/**
+ * Get bone mapping suggestions between two skeletons
+ */
+export async function suggestBoneMappings(
+  sourceAssetId: string,
+  targetAssetId: string
+): Promise<MappingSuggestionsResponse> {
+  const response = await apiClient.post<{
+    success: boolean;
+    source_bones: string[];
+    target_bones: string[];
+    suggestions: Array<{
+      source_bone: string;
+      target_bone: string;
+      confidence: number;
+      reason: string;
+    }>;
+    unmapped_source: string[];
+    unmapped_target: string[];
+    message: string;
+  }>('/animation/retargeting/suggest-mappings', {
+    source_asset_id: sourceAssetId,
+    target_asset_id: targetAssetId,
+  });
+
+  return {
+    success: response.success,
+    sourceBones: response.source_bones,
+    targetBones: response.target_bones,
+    suggestions: response.suggestions.map(s => ({
+      sourceBone: s.source_bone,
+      targetBone: s.target_bone,
+      confidence: s.confidence,
+      reason: s.reason,
+    })),
+    unmappedSource: response.unmapped_source,
+    unmappedTarget: response.unmapped_target,
+    message: response.message,
+  };
+}
+
+/**
+ * Retarget an animation to a different skeleton
+ */
+export async function retargetAnimation(
+  params: RetargetAnimationParams
+): Promise<RetargetAnimationResponse> {
+  const response = await apiClient.post<{
+    success: boolean;
+    clip_id?: string;
+    source_bones_mapped: number;
+    target_bones_affected: number;
+    unmapped_bones: string[];
+    warnings: string[];
+    message: string;
+    error?: string;
+  }>('/animation/retargeting/apply', {
+    source_clip_id: params.sourceClipId,
+    target_asset_id: params.targetAssetId,
+    name: params.name,
+    preset: params.preset,
+    custom_mappings: params.customMappings?.map(m => ({
+      source_bone: m.sourceBone,
+      target_bone: m.targetBone,
+      scale_factor: m.scaleFactor ?? 1.0,
+    })),
+    adjust_proportions: params.adjustProportions ?? true,
+    preserve_root_motion: params.preserveRootMotion ?? true,
+  });
+
+  return {
+    success: response.success,
+    clipId: response.clip_id,
+    sourceBonesMapped: response.source_bones_mapped,
+    targetBonesAffected: response.target_bones_affected,
+    unmappedBones: response.unmapped_bones,
+    warnings: response.warnings,
+    message: response.message,
     error: response.error,
   };
 }

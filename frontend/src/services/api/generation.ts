@@ -368,3 +368,103 @@ export async function addTextureToAsset(
     queuePosition: response.queue_position,
   };
 }
+
+// ============ Multi-View Generation ============
+
+export type MultiViewAngle =
+  | 'front'
+  | 'back'
+  | 'left'
+  | 'right'
+  | 'top'
+  | 'bottom'
+  | 'front_left'
+  | 'front_right'
+  | 'back_left'
+  | 'back_right';
+
+export interface MultiViewImage {
+  file: File;
+  angle: MultiViewAngle;
+}
+
+export interface MultiViewGenerationParams {
+  images: MultiViewImage[];
+  name?: string;
+  parameters: GenerationParameters;
+  priority?: 'low' | 'normal' | 'high';
+  projectId?: string;
+  tags?: string[];
+}
+
+export interface MultiViewGenerationResponse {
+  jobId: string;
+  assetId: string;
+  status: string;
+  message: string;
+  viewCount: number;
+  queuePosition?: number;
+}
+
+/**
+ * Submit multiple view images for enhanced 3D generation
+ *
+ * Multi-view input provides more information about the object, resulting in:
+ * - Better geometry accuracy
+ * - More consistent textures
+ * - Fewer artifacts on unseen sides
+ *
+ * Recommended views:
+ * - Minimum: front + back (2 views)
+ * - Good: front + back + left + right (4 views)
+ * - Best: front + back + left + right + top + bottom (6 views)
+ */
+export async function generateFromMultiView(
+  params: MultiViewGenerationParams
+): Promise<MultiViewGenerationResponse> {
+  const formData = new FormData();
+
+  // Append all image files
+  for (const img of params.images) {
+    formData.append('files', img.file);
+  }
+
+  // Append angles as comma-separated string
+  const angles = params.images.map(img => img.angle).join(',');
+  formData.append('angles', angles);
+
+  if (params.name) formData.append('name', params.name);
+  formData.append('inference_steps', String(params.parameters.inferenceSteps));
+  formData.append('guidance_scale', String(params.parameters.guidanceScale));
+  formData.append('octree_resolution', String(params.parameters.octreeResolution));
+  if (params.parameters.seed !== undefined) {
+    formData.append('seed', String(params.parameters.seed));
+  }
+  formData.append('generate_texture', String(params.parameters.generateTexture));
+  if (params.parameters.faceCount !== undefined) {
+    formData.append('face_count', String(params.parameters.faceCount));
+  }
+  formData.append('output_format', params.parameters.outputFormat);
+  formData.append('mode', params.parameters.mode);
+  formData.append('priority', params.priority || 'normal');
+  if (params.projectId) formData.append('project_id', params.projectId);
+  if (params.tags?.length) formData.append('tags', params.tags.join(','));
+
+  const response = await apiClient.post<{
+    job_id: string;
+    asset_id: string;
+    status: string;
+    message: string;
+    view_count: number;
+    queue_position?: number;
+  }>('/generation/multi-view-to-3d', formData);
+
+  return {
+    jobId: response.job_id,
+    assetId: response.asset_id,
+    status: response.status,
+    message: response.message,
+    viewCount: response.view_count,
+    queuePosition: response.queue_position,
+  };
+}

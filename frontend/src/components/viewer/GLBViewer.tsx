@@ -2,7 +2,7 @@
  * GLBViewer Component - 3D model viewer using React Three Fiber
  */
 
-import { Suspense, useEffect, useRef, useMemo, Component, ErrorInfo, ReactNode, useCallback } from 'react';
+import { Suspense, useEffect, useRef, useMemo, Component, ErrorInfo, ReactNode } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import {
   OrbitControls,
@@ -73,10 +73,9 @@ function Model({
   const { settings, isSkinnedPreview } = useViewerStore();
   const { skeletonData } = useRiggingStore();
   const groupRef = useRef<THREE.Group>(null);
-  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
-  const actionsRef = useRef<Map<string, THREE.AnimationAction>>(new Map());
+  const jsonMixerRef = useRef<THREE.AnimationMixer | null>(null);
+  const jsonActionsRef = useRef<Map<string, THREE.AnimationAction>>(new Map());
   const boneGroupsRef = useRef<Map<string, THREE.Object3D>>(new Map());
-  const embeddedActionsRef = useRef<Map<string, THREE.AnimationAction>>(new Map());
 
   // Animation store
   const {
@@ -87,27 +86,26 @@ function Model({
     setCurrentTime,
     setIsPlaying,
     // Embedded animation state
-    embeddedAnimations: storeEmbeddedAnimations,
     activeEmbeddedName,
     setEmbeddedAnimations,
     clearEmbeddedAnimations,
   } = useAnimationStore();
 
-  // Track if we're in a seek operation
+  // Track seek
   const lastTimeRef = useRef<number>(0);
-  const isSeeking = useRef<boolean>(false);
 
   // Load the GLB model (with animations if present)
-  const { scene, animations: embeddedAnimations } = useGLTF(url, true, true, (loader) => {
-    loader.manager.onError = (url) => {
-      onError?.(new Error(`Failed to load: ${url}`));
+  const gltf = useGLTF(url, true, true, (loader) => {
+    loader.manager.onError = (errorUrl) => {
+      onError?.(new Error(`Failed to load: ${errorUrl}`));
     };
   });
+
+  const { scene, animations: embeddedAnimations } = gltf;
 
   // Clone the scene to avoid mutation issues
   // Use SkeletonUtils.clone for skinned meshes to preserve skeleton binding
   const clonedScene = useMemo(() => {
-    // Check if scene has skinned meshes
     let hasSkinnedMesh = false;
     scene.traverse((child) => {
       if (child instanceof THREE.SkinnedMesh) {
@@ -123,6 +121,105 @@ function Model({
     }
   }, [scene]);
 
+  // --- EMBEDDED ANIMATIONS ---
+  // Fresh mixer + single action approach: destroy and recreate the mixer each time
+  // the selected animation changes. This avoids all Three.js action caching issues.
+  const embeddedMixerRef = useRef<THREE.AnimationMixer | null>(null);
+  const embeddedActionRef = useRef<THREE.AnimationAction | null>(null);
+
+  // Register available embedded animations in the store (no mixer work here)
+  useEffect(() => {
+    if (!isSkinnedPreview || !embeddedAnimations?.length) {
+      if (!isSkinnedPreview) {
+        clearEmbeddedAnimations();
+      }
+      return;
+    }
+
+    const animList = embeddedAnimations.map((clip, index) => {
+      const name = clip.name || `Animation_${index}`;
+      console.log(`Found embedded animation: "${name}" (${clip.duration.toFixed(2)}s, ${clip.tracks.length} tracks)`);
+      // Log first few track names to verify they differ between clips
+      const trackSample = clip.tracks.slice(0, 3).map(t => t.name);
+      console.log(`  Tracks: [${trackSample.join(', ')}${clip.tracks.length > 3 ? '...' : ''}]`);
+      // Log first value of first track to verify data differs
+      if (clip.tracks.length > 0 && clip.tracks[0].values.length > 0) {
+        console.log(`  First track values[0..3]: [${Array.from(clip.tracks[0].values.slice(0, 4)).map(v => v.toFixed(4)).join(', ')}]`);
+      }
+      return { name, duration: clip.duration, index };
+    });
+
+    setEmbeddedAnimations(animList);
+  }, [embeddedAnimations, isSkinnedPreview, setEmbeddedAnimations, clearEmbeddedAnimations]);
+
+  // Create mixer when the selected animation changes (NOT on play/pause)
+  useEffect(() => {
+    // Destroy previous mixer completely
+    if (embeddedMixerRef.current) {
+      embeddedMixerRef.current.stopAllAction();
+      embeddedMixerRef.current.uncacheRoot(clonedScene);
+      embeddedMixerRef.current = null;
+      embeddedActionRef.current = null;
+    }
+
+    if (!isSkinnedPreview || !activeEmbeddedName || !embeddedAnimations?.length) return;
+
+    // Find the clip by name
+    const clip = embeddedAnimations.find(
+      (c) => c.name === activeEmbeddedName || (!c.name && activeEmbeddedName === `Animation_${embeddedAnimations.indexOf(c)}`)
+    );
+    if (!clip) {
+      console.warn(`Clip "${activeEmbeddedName}" not found among ${embeddedAnimations.length} clips:`,
+        embeddedAnimations.map(c => c.name));
+      return;
+    }
+
+    // Create a brand new mixer for this specific animation
+    const mixer = new THREE.AnimationMixer(clonedScene);
+    embeddedMixerRef.current = mixer;
+
+    const action = mixer.clipAction(clip);
+    action.setLoop(THREE.LoopRepeat, Infinity);
+    action.clampWhenFinished = false;
+    embeddedActionRef.current = action;
+
+    console.log(`Created fresh mixer for "${activeEmbeddedName}" (${clip.tracks.length} tracks, ${clip.duration.toFixed(2)}s)`);
+
+    // Start playing immediately
+    action.reset().play();
+
+    return () => {
+      mixer.stopAllAction();
+      mixer.uncacheRoot(clonedScene);
+    };
+  }, [activeEmbeddedName, isSkinnedPreview, clonedScene, embeddedAnimations]);
+
+  // Handle play/pause without destroying the mixer
+  useEffect(() => {
+    if (!embeddedActionRef.current || !isSkinnedPreview) return;
+
+    if (isPlaying) {
+      embeddedActionRef.current.paused = false;
+    } else {
+      embeddedActionRef.current.paused = true;
+    }
+  }, [isPlaying, isSkinnedPreview]);
+
+  // Seek for embedded animations
+  useEffect(() => {
+    if (!embeddedMixerRef.current || !embeddedActionRef.current || !isSkinnedPreview || isPlaying) return;
+
+    const timeDiff = Math.abs(currentTime - lastTimeRef.current);
+    if (timeDiff > 0.05) {
+      const action = embeddedActionRef.current;
+      action.reset().play();
+      action.paused = true;
+      action.time = currentTime;
+      embeddedMixerRef.current.update(0);
+    }
+    lastTimeRef.current = currentTime;
+  }, [currentTime, isPlaying, isSkinnedPreview]);
+
   // Analyze model and report info
   useEffect(() => {
     if (!clonedScene) return;
@@ -131,8 +228,6 @@ function Model({
     let faceCount = 0;
     const materials = new Set<string>();
     let hasTextures = false;
-
-    // Debug: Log what we found in the scene
     let meshCount = 0;
     let skinnedMeshCount = 0;
     let boneCount = 0;
@@ -140,11 +235,6 @@ function Model({
     clonedScene.traverse((child) => {
       if (child instanceof THREE.SkinnedMesh) {
         skinnedMeshCount++;
-        console.log(`Found SkinnedMesh: ${child.name}`, {
-          skeleton: child.skeleton,
-          bindMode: child.bindMode,
-          bindMatrix: child.bindMatrix,
-        });
       }
       if (child instanceof THREE.Bone) {
         boneCount++;
@@ -161,7 +251,6 @@ function Model({
           }
         }
 
-        // Check materials
         const meshMaterials = Array.isArray(child.material)
           ? child.material
           : [child.material];
@@ -181,15 +270,10 @@ function Model({
 
     const boundingBox = new THREE.Box3().setFromObject(clonedScene);
 
-    // Log summary for debugging skinned mesh issues
     console.log('Scene analysis:', {
-      meshCount,
-      skinnedMeshCount,
-      boneCount,
-      vertexCount,
-      hasTextures,
-      materials: Array.from(materials),
-      isSkinnedPreview,
+      meshCount, skinnedMeshCount, boneCount, vertexCount, hasTextures,
+      materials: Array.from(materials), isSkinnedPreview,
+      embeddedAnimationCount: embeddedAnimations?.length || 0,
     });
 
     onLoad?.({
@@ -217,11 +301,10 @@ function Model({
     });
   }, [clonedScene, settings.showWireframe]);
 
-  // Create bone objects from skeleton data for animation targeting
-  // Skip this when in skinned preview mode - the GLB already has bones
+  // Create bone objects from skeleton data for JSON animation targeting
+  // Skip when in skinned preview mode - the GLB already has bones
   useEffect(() => {
     if (isSkinnedPreview) {
-      // In skinned preview, bones come from the GLB itself
       boneGroupsRef.current.forEach((group) => {
         group.parent?.remove(group);
       });
@@ -230,7 +313,6 @@ function Model({
     }
 
     if (!clonedScene || !skeletonData?.bones?.length) {
-      // Clear any existing bone groups
       boneGroupsRef.current.forEach((group) => {
         group.parent?.remove(group);
       });
@@ -238,16 +320,12 @@ function Model({
       return;
     }
 
-    // Clear previous bones
     boneGroupsRef.current.forEach((group) => {
       group.parent?.remove(group);
     });
     boneGroupsRef.current.clear();
 
-    // Create a bone map for quick lookup
     const boneDataMap = new Map(skeletonData.bones.map((b) => [b.name, b]));
-
-    // Create Object3D for each bone
     const boneGroups = new Map<string, THREE.Object3D>();
     skeletonData.bones.forEach((bone) => {
       const obj = new THREE.Object3D();
@@ -255,7 +333,6 @@ function Model({
       boneGroups.set(bone.name, obj);
     });
 
-    // Build parent-child hierarchy
     skeletonData.bones.forEach((bone) => {
       const obj = boneGroups.get(bone.name);
       if (!obj) return;
@@ -264,24 +341,21 @@ function Model({
         const parentObj = boneGroups.get(bone.parent);
         const parentBone = boneDataMap.get(bone.parent);
         if (parentObj && parentBone) {
-          // Set position relative to parent
           const parentHead = new THREE.Vector3(...parentBone.headPosition);
           const localPos = new THREE.Vector3(...bone.headPosition).sub(parentHead);
           obj.position.copy(localPos);
           parentObj.add(obj);
         }
       } else {
-        // Root bone - add to scene with absolute position
         obj.position.set(...bone.headPosition);
         clonedScene.add(obj);
       }
     });
 
     boneGroupsRef.current = boneGroups;
-    console.log(`Created ${boneGroups.size} bone objects for animation:`, Array.from(boneGroups.keys()));
+    console.log(`Created ${boneGroups.size} bone objects for animation`);
 
     return () => {
-      // Cleanup on unmount
       boneGroupsRef.current.forEach((group) => {
         group.parent?.remove(group);
       });
@@ -289,97 +363,42 @@ function Model({
     };
   }, [clonedScene, skeletonData, isSkinnedPreview]);
 
-  // Initialize animation mixer - recreate when skeleton changes to see new bones
+  // --- JSON-based animations (non-skinned mode) ---
+  // Initialize a separate mixer for JSON keyframe animations
   useEffect(() => {
-    if (!clonedScene) return;
+    if (!clonedScene || isSkinnedPreview) {
+      jsonMixerRef.current = null;
+      jsonActionsRef.current.clear();
+      return;
+    }
 
     const mixer = new THREE.AnimationMixer(clonedScene);
-    mixerRef.current = mixer;
-    actionsRef.current.clear();
-    embeddedActionsRef.current.clear();
+    jsonMixerRef.current = mixer;
+    jsonActionsRef.current.clear();
 
-    console.log('AnimationMixer initialized for scene:', clonedScene.name);
-
-    // Handle animation events
     const onFinished = () => {
       setIsPlaying(false);
       setCurrentTime(0);
     };
-
     mixer.addEventListener('finished', onFinished as any);
 
     return () => {
       mixer.removeEventListener('finished', onFinished as any);
       mixer.stopAllAction();
-      actionsRef.current.clear();
-      embeddedActionsRef.current.clear();
-      mixerRef.current = null;
+      jsonActionsRef.current.clear();
+      jsonMixerRef.current = null;
     };
-  }, [clonedScene, skeletonData, setCurrentTime, setIsPlaying]);
+  }, [clonedScene, skeletonData, isSkinnedPreview, setCurrentTime, setIsPlaying]);
 
-  // Load embedded animations from skinned GLB (when in skinned preview mode)
+  // Load JSON animation clips into mixer
   useEffect(() => {
-    if (!mixerRef.current || !isSkinnedPreview || !embeddedAnimations?.length) {
-      // Clear embedded animations when not in skinned preview
-      if (!isSkinnedPreview) {
-        embeddedActionsRef.current.forEach((action) => action.stop());
-        embeddedActionsRef.current.clear();
-        clearEmbeddedAnimations();
-      }
-      return;
-    }
-
-    console.log(`Loading ${embeddedAnimations.length} embedded animations from skinned GLB`);
-    embeddedActionsRef.current.clear();
-
-    // Build list for store
-    const animList: { name: string; duration: number; index: number }[] = [];
-
-    embeddedAnimations.forEach((animClip, index) => {
-      const action = mixerRef.current!.clipAction(animClip);
-      action.setLoop(THREE.LoopRepeat, Infinity);
-      action.clampWhenFinished = false;
-
-      // Use clip name as key, or index if no name
-      const key = animClip.name || `Animation_${index}`;
-      embeddedActionsRef.current.set(key, action);
-      animList.push({ name: key, duration: animClip.duration, index });
-      console.log(`Loaded embedded animation: ${key} (${animClip.duration.toFixed(2)}s)`);
-    });
-
-    // Register animations in store (this will auto-select the first one)
-    setEmbeddedAnimations(animList);
-
-    // DON'T auto-play - let user click play
-    console.log('Embedded animations loaded. Ready for playback.');
-  }, [embeddedAnimations, isSkinnedPreview, setEmbeddedAnimations, clearEmbeddedAnimations]);
-
-  // Load animation clips into mixer
-  useEffect(() => {
-    if (!mixerRef.current) return;
-
-    // Log bones available in scene for debugging
-    const bonesInScene: string[] = [];
-    clonedScene.traverse((obj) => {
-      if (obj !== clonedScene && obj.name) {
-        bonesInScene.push(obj.name);
-      }
-    });
-    console.log('Objects available for animation:', bonesInScene.slice(0, 20), bonesInScene.length > 20 ? `... and ${bonesInScene.length - 20} more` : '');
+    if (!jsonMixerRef.current || isSkinnedPreview) return;
 
     clips.forEach((clip) => {
-      // Skip if already loaded or no keyframe data
-      if (actionsRef.current.has(clip.id) || !clip.keyframe_data) {
-        if (!clip.keyframe_data) {
-          console.warn(`Animation clip '${clip.name}' has no keyframe data!`);
-        }
-        return;
-      }
+      if (jsonActionsRef.current.has(clip.id) || !clip.keyframe_data) return;
 
       try {
-        // Convert backend keyframe data to Three.js tracks
         const tracks: THREE.KeyframeTrack[] = [];
-
         for (const track of clip.keyframe_data.tracks) {
           const targetName = track.bone_name;
           let trackName: string;
@@ -402,26 +421,12 @@ function Model({
               continue;
           }
 
-          const keyframeTrack = new TrackClass(
-            trackName,
-            track.times,
-            track.values,
-            THREE.InterpolateLinear
-          );
-          tracks.push(keyframeTrack);
+          tracks.push(new TrackClass(trackName, track.times, track.values, THREE.InterpolateLinear));
         }
 
-        // Create animation clip
-        const animClip = new THREE.AnimationClip(
-          clip.name,
-          clip.keyframe_data.duration,
-          tracks
-        );
+        const animClip = new THREE.AnimationClip(clip.name, clip.keyframe_data.duration, tracks);
+        const action = jsonMixerRef.current!.clipAction(animClip);
 
-        // Create action from clip
-        const action = mixerRef.current!.clipAction(animClip);
-
-        // Configure loop mode
         switch (clip.loop_mode) {
           case 'loop':
             action.setLoop(THREE.LoopRepeat, Infinity);
@@ -435,135 +440,72 @@ function Model({
             break;
         }
 
-        actionsRef.current.set(clip.id, action);
-        console.log(`Loaded animation: ${clip.name} with ${tracks.length} tracks, targeting bones:`,
-          clip.keyframe_data.tracks.map(t => t.bone_name));
+        jsonActionsRef.current.set(clip.id, action);
+        console.log(`Loaded JSON animation: ${clip.name} with ${tracks.length} tracks`);
       } catch (error) {
         console.error('Failed to load animation clip:', clip.name, error);
       }
     });
-  }, [clips, clonedScene, skeletonData]);
+  }, [clips, clonedScene, skeletonData, isSkinnedPreview]);
 
-  // Handle play/pause/stop for JSON-based animations
+  // Play/pause JSON-based animations
   useEffect(() => {
-    if (!mixerRef.current || !activeClipId || isSkinnedPreview) return;
+    if (!jsonMixerRef.current || !activeClipId || isSkinnedPreview) return;
 
-    const action = actionsRef.current.get(activeClipId);
+    const action = jsonActionsRef.current.get(activeClipId);
     if (!action) return;
 
-    // Stop all other actions
-    actionsRef.current.forEach((a, id) => {
-      if (id !== activeClipId) {
-        a.stop();
-      }
+    jsonActionsRef.current.forEach((a, id) => {
+      if (id !== activeClipId) a.stop();
     });
 
     if (isPlaying) {
-      action.reset();
-      action.play();
+      action.reset().play();
     } else {
       action.paused = true;
     }
   }, [activeClipId, isPlaying, isSkinnedPreview]);
 
-  // Handle play/pause/stop for embedded animations (skinned preview mode)
-  // Only plays the SELECTED embedded animation, not all of them
+  // Seek for JSON animations
   useEffect(() => {
-    if (!mixerRef.current || !isSkinnedPreview || embeddedActionsRef.current.size === 0) return;
-    if (!activeEmbeddedName) return;
+    if (!jsonMixerRef.current || isSkinnedPreview || !activeClipId || isPlaying) return;
 
-    const selectedAction = embeddedActionsRef.current.get(activeEmbeddedName);
-    if (!selectedAction) {
-      console.warn(`Embedded animation '${activeEmbeddedName}' not found`);
-      return;
-    }
-
-    // Stop ALL other embedded animations
-    embeddedActionsRef.current.forEach((action, name) => {
-      if (name !== activeEmbeddedName && action.isRunning()) {
-        action.stop();
-        console.log(`Stopped embedded animation: ${name}`);
-      }
-    });
-
-    // Control the selected animation
-    if (isPlaying) {
-      if (!selectedAction.isRunning()) {
-        selectedAction.reset().play();
-        console.log(`Playing embedded animation: ${activeEmbeddedName}`);
-      } else if (selectedAction.paused) {
-        selectedAction.paused = false;
-        console.log(`Resumed embedded animation: ${activeEmbeddedName}`);
-      }
-    } else {
-      if (selectedAction.isRunning()) {
-        selectedAction.paused = true;
-        console.log(`Paused embedded animation: ${activeEmbeddedName}`);
-      }
-    }
-  }, [isPlaying, isSkinnedPreview, activeEmbeddedName]);
-
-  // Handle seek for JSON animations (when currentTime changes while paused)
-  useEffect(() => {
-    if (!mixerRef.current || isSkinnedPreview || !activeClipId || isPlaying) return;
-
-    const action = actionsRef.current.get(activeClipId);
+    const action = jsonActionsRef.current.get(activeClipId);
     if (!action) return;
 
-    // Detect if this is a user-initiated seek (time changed significantly)
     const timeDiff = Math.abs(currentTime - lastTimeRef.current);
     if (timeDiff > 0.05) {
-      // User seeked - update action time
       action.paused = false;
       action.time = currentTime;
-      mixerRef.current.update(0); // Force update to show the new frame
+      jsonMixerRef.current.update(0);
       action.paused = true;
     }
     lastTimeRef.current = currentTime;
   }, [currentTime, activeClipId, isPlaying, isSkinnedPreview]);
 
-  // Handle seek for embedded animations (when currentTime changes while paused)
-  useEffect(() => {
-    if (!mixerRef.current || !isSkinnedPreview || !activeEmbeddedName || isPlaying) return;
-
-    const action = embeddedActionsRef.current.get(activeEmbeddedName);
-    if (!action) return;
-
-    // Detect if this is a user-initiated seek (time changed significantly)
-    const timeDiff = Math.abs(currentTime - lastTimeRef.current);
-    if (timeDiff > 0.05) {
-      // User seeked - update action time
-      action.paused = false;
-      action.time = currentTime;
-      mixerRef.current.update(0); // Force update to show the new frame
-      action.paused = true;
-    }
-    lastTimeRef.current = currentTime;
-  }, [currentTime, activeEmbeddedName, isPlaying, isSkinnedPreview]);
-
-  // Update mixer and current time on each frame
+  // Update mixers and current time on each frame
   useFrame((_, delta) => {
     // Auto-rotate (disabled during animation playback)
     if (settings.autoRotate && !isPlaying && groupRef.current) {
       groupRef.current.rotation.y += delta * 0.5;
     }
 
-    // Update animation mixer (always update when playing - works for both modes)
-    if (mixerRef.current && isPlaying) {
-      mixerRef.current.update(delta);
-
-      // Update current time in store from the active animation
-      if (isSkinnedPreview && activeEmbeddedName) {
-        // Get time from SELECTED embedded action
-        const selectedAction = embeddedActionsRef.current.get(activeEmbeddedName);
-        if (selectedAction) {
-          setCurrentTime(selectedAction.time);
-        }
-      } else if (activeClipId) {
-        const activeAction = actionsRef.current.get(activeClipId);
+    // Update JSON mixer
+    if (jsonMixerRef.current && isPlaying && !isSkinnedPreview) {
+      jsonMixerRef.current.update(delta);
+      if (activeClipId) {
+        const activeAction = jsonActionsRef.current.get(activeClipId);
         if (activeAction) {
           setCurrentTime(activeAction.time);
         }
+      }
+    }
+
+    // Update embedded mixer
+    if (embeddedMixerRef.current && isPlaying && isSkinnedPreview) {
+      embeddedMixerRef.current.update(delta);
+      if (embeddedActionRef.current) {
+        setCurrentTime(embeddedActionRef.current.time);
       }
     }
   });

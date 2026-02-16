@@ -55,6 +55,8 @@ class AssetResponse(BaseModel):
     has_animations: bool = False
     animation_count: int = 0
     rigging_data: Optional[dict] = None
+    # Folder organization
+    folder_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -75,6 +77,7 @@ class AssetUpdate(BaseModel):
     is_favorite: Optional[bool] = None
     rating: Optional[int] = Field(None, ge=1, le=5)
     tags: Optional[List[int]] = None
+    folder_id: Optional[int] = None
 
 
 class BulkDeleteRequest(BaseModel):
@@ -85,3 +88,16 @@ class BulkDeleteRequest(BaseModel):
 class TagListResponse(BaseModel):
     """Schema for tag list response."""
     tags: List[TagResponse]
+
+
+class ImportModelResponse(BaseModel):
+    """Schema for imported model response."""
+    success: bool
+    asset_id: str
+    name: str
+    file_path: str
+    vertex_count: int
+    face_count: int
+    has_texture: bool
+    message: str
+    error: Optional[str] = None

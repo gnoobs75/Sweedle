@@ -184,7 +184,11 @@ export const useAnimationStore = create<AnimationState>((set, get) => ({
     });
   },
 
-  setClips: (clips) => set({ clips }),
+  setClips: (clips) => set({
+    clips,
+    // Auto-select first clip if none active
+    activeClipId: clips.length > 0 ? clips[0].id : null,
+  }),
 
   addClip: (clip) =>
     set((state) => ({
@@ -230,15 +234,21 @@ export const useAnimationStore = create<AnimationState>((set, get) => ({
   reset: () => set(initialState),
 
   // Embedded animation actions
-  setEmbeddedAnimations: (animations) =>
+  setEmbeddedAnimations: (animations) => {
+    const { activeEmbeddedName } = get();
+    // Only auto-select first if no valid selection exists
+    const currentStillValid = activeEmbeddedName && animations.some(a => a.name === activeEmbeddedName);
     set({
       embeddedAnimations: animations,
-      // Auto-select first animation if available
-      activeEmbeddedName: animations.length > 0 ? animations[0].name : null,
-    }),
+      activeEmbeddedName: currentStillValid ? activeEmbeddedName : (animations.length > 0 ? animations[0].name : null),
+    });
+  },
 
-  setActiveEmbeddedName: (name) =>
-    set({ activeEmbeddedName: name, currentTime: 0, isPlaying: false }),
+  setActiveEmbeddedName: (name) => {
+    const { isPlaying } = get();
+    // Keep playing if already playing - seamless animation switching
+    set({ activeEmbeddedName: name, currentTime: 0, isPlaying });
+  },
 
   clearEmbeddedAnimations: () =>
     set({ embeddedAnimations: [], activeEmbeddedName: null }),

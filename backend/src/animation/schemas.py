@@ -138,3 +138,93 @@ class AnimationClipListResponse(BaseModel):
     """List of animation clips response."""
     clips: list[AnimationClipResponse]
     total: int
+
+
+# ============ Animation Retargeting Schemas ============
+
+class BoneMapping(BaseModel):
+    """Mapping between source and target bone names."""
+    source_bone: str = Field(..., description="Bone name in source skeleton")
+    target_bone: str = Field(..., description="Bone name in target skeleton")
+    scale_factor: float = Field(default=1.0, ge=0.1, le=10.0, description="Scale factor for proportional retargeting")
+
+
+class RetargetingPreset(str, Enum):
+    """Predefined bone mapping presets for common skeleton types."""
+    MIXAMO_TO_STANDARD = "mixamo_to_standard"
+    STANDARD_TO_MIXAMO = "standard_to_mixamo"
+    BLENDER_TO_STANDARD = "blender_to_standard"
+    STANDARD_TO_BLENDER = "standard_to_blender"
+    UNITY_TO_STANDARD = "unity_to_standard"
+    STANDARD_TO_UNITY = "standard_to_unity"
+    AUTO_DETECT = "auto_detect"
+
+
+class RetargetAnimationRequest(BaseModel):
+    """Request to retarget animation from source to target asset."""
+    source_clip_id: str = Field(..., description="Animation clip ID to retarget from")
+    target_asset_id: str = Field(..., description="Target asset to apply animation to")
+    name: Optional[str] = Field(None, description="Name for the retargeted animation")
+    preset: Optional[RetargetingPreset] = Field(
+        None,
+        description="Use a predefined bone mapping preset"
+    )
+    custom_mappings: Optional[list[BoneMapping]] = Field(
+        None,
+        description="Custom bone mappings (overrides preset)"
+    )
+    adjust_proportions: bool = Field(
+        default=True,
+        description="Adjust animations for different skeleton proportions"
+    )
+    preserve_root_motion: bool = Field(
+        default=True,
+        description="Keep root bone motion"
+    )
+
+
+class RetargetAnimationResponse(BaseModel):
+    """Response from animation retargeting."""
+    success: bool
+    clip_id: Optional[str] = None
+    source_bones_mapped: int
+    target_bones_affected: int
+    unmapped_bones: list[str]
+    warnings: list[str]
+    message: str
+    error: Optional[str] = None
+
+
+class GetMappingSuggestionsRequest(BaseModel):
+    """Request for auto-generated bone mapping suggestions."""
+    source_asset_id: str = Field(..., description="Asset with source skeleton")
+    target_asset_id: str = Field(..., description="Asset with target skeleton")
+
+
+class BoneMappingSuggestion(BaseModel):
+    """Suggested mapping between bones."""
+    source_bone: str
+    target_bone: str
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence in the mapping")
+    reason: str = Field(..., description="Why this mapping was suggested")
+
+
+class GetMappingSuggestionsResponse(BaseModel):
+    """Response with suggested bone mappings."""
+    success: bool
+    source_bones: list[str]
+    target_bones: list[str]
+    suggestions: list[BoneMappingSuggestion]
+    unmapped_source: list[str]
+    unmapped_target: list[str]
+    message: str
+
+
+class RetargetingPresetInfo(BaseModel):
+    """Information about a retargeting preset."""
+    id: RetargetingPreset
+    name: str
+    description: str
+    source_type: str
+    target_type: str
+    mappings_count: int

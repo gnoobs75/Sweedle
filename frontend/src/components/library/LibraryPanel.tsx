@@ -12,6 +12,7 @@ import { AssetGrid } from './AssetGrid';
 import { BulkActions, SelectionToggle } from './BulkActions';
 import { TagManager } from './TagManager';
 import { AssetDetails } from './AssetDetails';
+import { FolderSidebar } from './FolderSidebar';
 import { Button } from '../ui/Button';
 import { Tooltip } from '../ui/Tooltip';
 import { cn } from '../../lib/utils';
@@ -45,6 +46,40 @@ export function LibraryPanel() {
   const [isSelecting, setIsSelecting] = useState(false);
   const [isRegeneratingThumbnails, setIsRegeneratingThumbnails] = useState(false);
   const [thumbnailProgress, setThumbnailProgress] = useState({ current: 0, total: 0 });
+
+  // Fetch assets (defined before handleRegenerateAllThumbnails which depends on it)
+  const fetchAssets = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await listAssets({
+        page,
+        pageSize,
+        search: filters.search,
+        tags: filters.tags,
+        sourceType: filters.sourceType === 'all' ? undefined : filters.sourceType,
+        hasLod: filters.hasLod ?? undefined,
+        isFavorite: filters.isFavorite ?? undefined,
+        folderId: filters.folderId ?? undefined,
+        sortBy: filters.sortBy,
+        sortOrder: filters.sortOrder,
+      });
+
+      setAssets(response.assets);
+      setTotalAssets(response.total);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load assets';
+      setError(message);
+      addNotification({
+        type: 'error',
+        title: 'Failed to Load Assets',
+        message,
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [page, pageSize, filters, setAssets, setTotalAssets, setLoading, setError, addNotification]);
 
   // Regenerate thumbnails for all assets
   const handleRegenerateAllThumbnails = useCallback(async () => {
@@ -80,39 +115,6 @@ export function LibraryPanel() {
       message: `Regenerated ${successCount} thumbnail${successCount !== 1 ? 's' : ''}${failCount > 0 ? `, ${failCount} failed` : ''}`,
     });
   }, [assets, fetchAssets, addNotification]);
-
-  // Fetch assets
-  const fetchAssets = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await listAssets({
-        page,
-        pageSize,
-        search: filters.search,
-        tags: filters.tags,
-        sourceType: filters.sourceType === 'all' ? undefined : filters.sourceType,
-        hasLod: filters.hasLod ?? undefined,
-        isFavorite: filters.isFavorite ?? undefined,
-        sortBy: filters.sortBy,
-        sortOrder: filters.sortOrder,
-      });
-
-      setAssets(response.assets);
-      setTotalAssets(response.total);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load assets';
-      setError(message);
-      addNotification({
-        type: 'error',
-        title: 'Failed to Load Assets',
-        message,
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [page, pageSize, filters, setAssets, setTotalAssets, setLoading, setError, addNotification]);
 
   // Fetch tags
   const fetchTags = useCallback(async () => {
@@ -159,6 +161,9 @@ export function LibraryPanel() {
 
   return (
     <div className="h-full flex">
+      {/* Folder Sidebar */}
+      <FolderSidebar />
+
       {/* Main Content */}
       <div className={cn('flex-1 flex flex-col min-w-0', selectedAsset && 'hidden lg:flex')}>
         {/* Header */}

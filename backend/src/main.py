@@ -356,6 +356,11 @@ from src.rigging.router import router as rigging_router
 from src.pipeline.router import router as pipeline_router
 from src.workflow.router import router as workflow_router
 from src.animation.router import router as animation_router
+from src.folders.router import router as folders_router
+from src.mesh.router import router as mesh_router
+from src.materials.router import router as materials_router
+from src.variants.router import router as variants_router
+from src.templates.router import router as templates_router
 
 app.include_router(generation_router, prefix="/api/generation", tags=["Generation"])
 app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
@@ -365,6 +370,11 @@ app.include_router(rigging_router, prefix="/api", tags=["Rigging"])
 app.include_router(animation_router, prefix="/api", tags=["Animation"])
 app.include_router(pipeline_router, tags=["Pipeline"])
 app.include_router(workflow_router, tags=["Workflow"])
+app.include_router(folders_router, prefix="/api", tags=["Folders"])
+app.include_router(mesh_router, prefix="/api", tags=["Mesh"])
+app.include_router(materials_router, prefix="/api", tags=["Materials"])
+app.include_router(variants_router, prefix="/api/variants", tags=["Variants"])
+app.include_router(templates_router, prefix="/api/workflow", tags=["Templates"])
 
 
 # Serve frontend static files

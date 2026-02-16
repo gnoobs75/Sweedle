@@ -15,9 +15,14 @@ interface Notification {
   timestamp: number;
 }
 
+type ActiveView = 'workspace' | 'library';
+
 interface UIState {
   // Mode
   mode: UIMode;
+
+  // Active view (workspace vs full-page library)
+  activeView: ActiveView;
 
   // Panel visibility and layout
   activePanels: Panel[];
@@ -43,6 +48,7 @@ interface UIState {
   loadingMessage: string | null;
 
   // Actions
+  setActiveView: (view: ActiveView) => void;
   setMode: (mode: UIMode) => void;
   toggleMode: () => void;
 
@@ -81,12 +87,13 @@ const defaultPanelLayout: PanelLayout = {
   right: 320,
 };
 
-const defaultActivePanels: Panel[] = ['generation', 'viewer', 'library'];
+const defaultActivePanels: Panel[] = ['generation', 'viewer'];
 
 export const useUIStore = create<UIState>()(
   persist(
     (set, get) => ({
       // Initial state
+      activeView: 'workspace',
       mode: 'simple',
       activePanels: [...defaultActivePanels],
       panelLayout: { ...defaultPanelLayout },
@@ -99,6 +106,9 @@ export const useUIStore = create<UIState>()(
       connectionError: null,
       globalLoading: false,
       loadingMessage: null,
+
+      // View actions
+      setActiveView: (view) => set({ activeView: view }),
 
       // Mode actions
       setMode: (mode) => set({ mode }),
@@ -213,6 +223,7 @@ export const useUIStore = create<UIState>()(
     {
       name: 'sweedle-ui',
       partialize: (state) => ({
+        activeView: state.activeView,
         mode: state.mode,
         panelLayout: state.panelLayout,
         sidebarCollapsed: state.sidebarCollapsed,

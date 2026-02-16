@@ -8,7 +8,7 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { useUIStore } from './stores/uiStore';
 import { WorkflowWizard } from './components/workflow';
 import { ViewerPanel } from './components/viewer/ViewerPanel';
-import { LibraryPanel } from './components/library/LibraryPanel';
+import { LibraryPage } from './components/library/LibraryPage';
 import { ExportPanel } from './components/export/ExportPanel';
 import { RiggingPanel } from './components/rigging/RiggingPanel';
 import { ToastContainer, DebugPanel, GPUMonitor } from './components/ui';
@@ -21,7 +21,7 @@ function App() {
   // Initialize WebSocket connection (only after backend is ready)
   useWebSocket();
 
-  const { activePanels, activeModal, modalData, closeModal } = useUIStore();
+  const { activePanels, activeView, activeModal, modalData, closeModal } = useUIStore();
 
   // Log app initialization (once backend is ready)
   useEffect(() => {
@@ -40,15 +40,17 @@ function App() {
 
   return (
     <>
-      <AppShell
-        leftPanel={
-          activePanels.includes('generation') ? <WorkflowWizard /> : null
-        }
-        centerPanel={<ViewerPanel />}
-        rightPanel={
-          activePanels.includes('library') ? <LibraryPanel /> : null
-        }
-      />
+      {activeView === 'library' ? (
+        <LibraryPage />
+      ) : (
+        <AppShell
+          leftPanel={
+            activePanels.includes('generation') ? <WorkflowWizard /> : null
+          }
+          centerPanel={<ViewerPanel />}
+          rightPanel={null}
+        />
+      )}
       <ToastContainer />
       <DebugPanel />
 

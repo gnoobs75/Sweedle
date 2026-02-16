@@ -167,3 +167,36 @@ class StylePresetResponse(BaseModel):
     id: str
     name: str
     description: str
+
+
+# Multi-View Input schemas
+
+class MultiViewAngle(str, Enum):
+    """Standard view angles for multi-view input."""
+    FRONT = "front"
+    BACK = "back"
+    LEFT = "left"
+    RIGHT = "right"
+    TOP = "top"
+    BOTTOM = "bottom"
+    FRONT_LEFT = "front_left"
+    FRONT_RIGHT = "front_right"
+    BACK_LEFT = "back_left"
+    BACK_RIGHT = "back_right"
+
+
+class MultiViewImage(BaseModel):
+    """Single image in a multi-view set."""
+    image_path: str
+    angle: MultiViewAngle
+    weight: float = Field(1.0, ge=0.1, le=2.0, description="Influence weight for this view")
+
+
+class MultiViewGenerationResponse(BaseModel):
+    """Response for multi-view generation."""
+    job_id: str
+    asset_id: str
+    status: str
+    message: str
+    view_count: int
+    queue_position: Optional[int] = None

@@ -111,7 +111,9 @@ export function LandmarkEditor({ onComplete, onCancel }: LandmarkEditorProps) {
   const [error, setError] = useState<string | null>(null);
   const [meshBoundsData, setMeshBoundsData] = useState<{ min: [number, number, number]; max: [number, number, number] } | null>(null);
 
-  const effectiveType = characterType === 'auto' ? 'quadruped' : characterType;
+  // characterType should already be set to 'humanoid' or 'quadruped' by RiggingStage
+  // before LandmarkEditor mounts. Fallback to 'humanoid' just in case.
+  const effectiveType = characterType === 'auto' ? 'humanoid' : characterType;
 
   // Load fitted landmarks on mount
   useEffect(() => {
@@ -202,15 +204,22 @@ export function LandmarkEditor({ onComplete, onCancel }: LandmarkEditorProps) {
     [landmarkInfo]
   );
 
-  // Group landmarks by body region
+  // Group landmarks by body region based on character type
   const landmarkGroups = useMemo(() => {
-    const groups: Record<string, string[]> = {
-      Body: ['Hips', 'Chest'],
-      Head: ['Head'],
-      Tail: ['TailTip'],
-      'Front Legs': ['FrontLeftPaw', 'FrontRightPaw'],
-      'Back Legs': ['BackLeftPaw', 'BackRightPaw'],
-    };
+    const groups: Record<string, string[]> = effectiveType === 'quadruped'
+      ? {
+          Body: ['Hips', 'Chest'],
+          Head: ['Head'],
+          Tail: ['TailTip'],
+          'Front Legs': ['FrontLeftKnee', 'FrontLeftPaw', 'FrontRightKnee', 'FrontRightPaw'],
+          'Back Legs': ['BackLeftKnee', 'BackLeftPaw', 'BackRightKnee', 'BackRightPaw'],
+        }
+      : {
+          Body: ['Hips', 'Chest'],
+          Head: ['Head'],
+          Arms: ['LeftElbow', 'LeftHand', 'RightElbow', 'RightHand'],
+          Legs: ['LeftKnee', 'LeftFoot', 'RightKnee', 'RightFoot'],
+        };
 
     // Filter to only include landmarks that exist
     return Object.fromEntries(
@@ -218,7 +227,7 @@ export function LandmarkEditor({ onComplete, onCancel }: LandmarkEditorProps) {
         .map(([group, names]) => [group, names.filter((n) => n in landmarks)])
         .filter(([, names]) => (names as string[]).length > 0)
     );
-  }, [landmarks]);
+  }, [landmarks, effectiveType]);
 
   if (isLoading) {
     return (

@@ -5,7 +5,7 @@
 import { useState, useCallback } from 'react';
 import { useViewerStore } from '../../stores/viewerStore';
 import { useLibraryStore } from '../../stores/libraryStore';
-import { getAssetModelUrl, getAssetThumbnailUrl, updateAsset } from '../../services/api/assets';
+import { getAssetModelUrl, getAssetThumbnailUrl, getStorageBase, updateAsset } from '../../services/api/assets';
 import { regenerateThumbnail } from '../../services/api/export';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
@@ -39,9 +39,11 @@ export function AssetCard({
   const { loadModel } = useViewerStore();
   const { setCurrentAsset, updateAsset: updateAssetInStore } = useLibraryStore();
 
-  // Cache-busted thumbnail URL
-  const baseThumbnailUrl = asset.thumbnailPath || getAssetThumbnailUrl(asset.id);
-  const thumbnailUrl = thumbnailKey > 0 ? `${baseThumbnailUrl}?v=${thumbnailKey}` : baseThumbnailUrl;
+  // Cache-busted thumbnail URL — ensure thumbnailPath gets base URL prepended
+  const rawThumbnailUrl = asset.thumbnailPath
+    ? `${getStorageBase()}/${asset.thumbnailPath.replace(/\\/g, '/').replace(/^\//, '')}`
+    : getAssetThumbnailUrl(asset.id);
+  const thumbnailUrl = thumbnailKey > 0 ? `${rawThumbnailUrl}?v=${thumbnailKey}` : rawThumbnailUrl;
 
   const handleRegenerateThumbnail = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -321,7 +323,9 @@ export function AssetListItem({
   const { loadModel } = useViewerStore();
   const { setCurrentAsset } = useLibraryStore();
 
-  const thumbnailUrl = asset.thumbnailPath || getAssetThumbnailUrl(asset.id);
+  const thumbnailUrl = asset.thumbnailPath
+    ? `${getStorageBase()}/${asset.thumbnailPath.replace(/\\/g, '/').replace(/^\//, '')}`
+    : getAssetThumbnailUrl(asset.id);
 
   const handleClick = useCallback(() => {
     if (onClick) {

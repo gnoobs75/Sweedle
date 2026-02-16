@@ -25,7 +25,7 @@ class Landmark:
     color: str  # For visualization
 
 
-# Quadruped landmarks - only 8 key points to position
+# Quadruped landmarks - 12 key points to position
 # Note: +Z is forward (direction animal faces), -Z is backward (tail direction)
 # This matches Hunyuan3D mesh orientation and most game engine conventions
 QUADRUPED_LANDMARKS = {
@@ -33,19 +33,27 @@ QUADRUPED_LANDMARKS = {
     "Chest": Landmark("Chest", np.array([0, 0.7, 0.6]), "Front of body where front legs attach", "#ff8040"),
     "Head": Landmark("Head", np.array([0, 0.9, 1.0]), "Top/front of head", "#40ff80"),
     "TailTip": Landmark("TailTip", np.array([0, 0.35, -0.7]), "End of tail", "#8040ff"),
+    "FrontLeftKnee": Landmark("FrontLeftKnee", np.array([0.15, 0.38, 0.60]), "Front left elbow/knee", "#ff80ff"),
+    "FrontRightKnee": Landmark("FrontRightKnee", np.array([-0.15, 0.38, 0.60]), "Front right elbow/knee", "#ff80ff"),
+    "BackLeftKnee": Landmark("BackLeftKnee", np.array([0.15, 0.35, 0.0]), "Back left knee", "#ffaa40"),
+    "BackRightKnee": Landmark("BackRightKnee", np.array([-0.15, 0.35, 0.0]), "Back right knee", "#ffaa40"),
     "FrontLeftPaw": Landmark("FrontLeftPaw", np.array([0.15, 0.02, 0.65]), "Front left foot", "#40ffff"),
     "FrontRightPaw": Landmark("FrontRightPaw", np.array([-0.15, 0.02, 0.65]), "Front right foot", "#40ffff"),
     "BackLeftPaw": Landmark("BackLeftPaw", np.array([0.15, 0.02, -0.05]), "Back left foot", "#ffff40"),
     "BackRightPaw": Landmark("BackRightPaw", np.array([-0.15, 0.02, -0.05]), "Back right foot", "#ffff40"),
 }
 
-# Humanoid landmarks - 10 key points
+# Humanoid landmarks - 11 key points
 HUMANOID_LANDMARKS = {
     "Hips": Landmark("Hips", np.array([0, 1.0, 0]), "Center of pelvis", "#ff4080"),
     "Chest": Landmark("Chest", np.array([0, 1.4, 0]), "Center of chest", "#ff8040"),
     "Head": Landmark("Head", np.array([0, 1.75, 0]), "Top of head", "#40ff80"),
+    "LeftElbow": Landmark("LeftElbow", np.array([0.4, 1.25, -0.05]), "Left elbow joint", "#ff80ff"),
+    "RightElbow": Landmark("RightElbow", np.array([-0.4, 1.25, -0.05]), "Right elbow joint", "#ff80ff"),
     "LeftHand": Landmark("LeftHand", np.array([0.6, 1.2, 0]), "Left hand/wrist", "#40ffff"),
     "RightHand": Landmark("RightHand", np.array([-0.6, 1.2, 0]), "Right hand/wrist", "#40ffff"),
+    "LeftKnee": Landmark("LeftKnee", np.array([0.1, 0.5, 0.05]), "Left knee joint", "#ffaa40"),
+    "RightKnee": Landmark("RightKnee", np.array([-0.1, 0.5, 0.05]), "Right knee joint", "#ffaa40"),
     "LeftFoot": Landmark("LeftFoot", np.array([0.1, 0.05, 0]), "Left foot/ankle", "#ffff40"),
     "RightFoot": Landmark("RightFoot", np.array([-0.1, 0.05, 0]), "Right foot/ankle", "#ffff40"),
 }
@@ -128,7 +136,9 @@ def _generate_quadruped_skeleton(lm: Dict[str, np.ndarray]) -> Skeleton:
     bones_by_name: Dict[str, Bone] = {}
 
     # Ensure all required landmarks exist
-    required = ["Hips", "Chest", "Head", "TailTip", "FrontLeftPaw", "FrontRightPaw", "BackLeftPaw", "BackRightPaw"]
+    required = ["Hips", "Chest", "Head", "TailTip",
+                "FrontLeftKnee", "FrontRightKnee", "BackLeftKnee", "BackRightKnee",
+                "FrontLeftPaw", "FrontRightPaw", "BackLeftPaw", "BackRightPaw"]
     for name in required:
         if name not in lm:
             raise ValueError(f"Missing required landmark: {name}")
@@ -171,72 +181,64 @@ def _generate_quadruped_skeleton(lm: Dict[str, np.ndarray]) -> Skeleton:
     _create_bone("Tail3", "Tail2", tail_positions[3], tail_positions[4], bones_by_name, connected=True)
     _create_bone("Tail4", "Tail3", tail_positions[4], tail_positions[5], bones_by_name, connected=True)
 
-    # === FRONT LEFT LEG ===
-    _add_quadruped_leg_v2(bones_by_name, "LeftFront", chest_pos, lm["FrontLeftPaw"], is_front=True, side_offset=0.1)
+    # === FRONT LEFT LEG (Chest -> FrontLeftKnee -> FrontLeftPaw) ===
+    _add_quadruped_leg(bones_by_name, "LeftFront", chest_pos, lm["FrontLeftKnee"], lm["FrontLeftPaw"], is_front=True, side_offset=0.1)
 
     # === FRONT RIGHT LEG ===
-    _add_quadruped_leg_v2(bones_by_name, "RightFront", chest_pos, lm["FrontRightPaw"], is_front=True, side_offset=-0.1)
+    _add_quadruped_leg(bones_by_name, "RightFront", chest_pos, lm["FrontRightKnee"], lm["FrontRightPaw"], is_front=True, side_offset=-0.1)
 
-    # === BACK LEFT LEG ===
-    _add_quadruped_leg_v2(bones_by_name, "LeftBack", hips_pos, lm["BackLeftPaw"], is_front=False, side_offset=0.1)
+    # === BACK LEFT LEG (Hips -> BackLeftKnee -> BackLeftPaw) ===
+    _add_quadruped_leg(bones_by_name, "LeftBack", hips_pos, lm["BackLeftKnee"], lm["BackLeftPaw"], is_front=False, side_offset=0.1)
 
     # === BACK RIGHT LEG ===
-    _add_quadruped_leg_v2(bones_by_name, "RightBack", hips_pos, lm["BackRightPaw"], is_front=False, side_offset=-0.1)
+    _add_quadruped_leg(bones_by_name, "RightBack", hips_pos, lm["BackRightKnee"], lm["BackRightPaw"], is_front=False, side_offset=-0.1)
 
     # Create skeleton with proper structure
     skeleton = Skeleton(root=root_bone, bones=bones_by_name, character_type=CharacterType.QUADRUPED)
 
-    logger.info(f"Generated quadruped skeleton with {len(bones_by_name)} bones from 8 landmarks")
+    logger.info(f"Generated quadruped skeleton with {len(bones_by_name)} bones from 12 landmarks")
     return skeleton
 
 
-def _add_quadruped_leg_v2(
+def _add_quadruped_leg(
     bones_by_name: Dict[str, Bone],
     prefix: str,
     body_pos: np.ndarray,
+    knee_pos: np.ndarray,
     paw_pos: np.ndarray,
     is_front: bool,
     side_offset: float,
 ) -> None:
     """
-    Add a quadruped leg bone chain from body to paw.
+    Add a quadruped leg bone chain using actual knee landmark position.
 
     The leg has: Shoulder/Hip -> UpperArm/UpperLeg -> LowerArm/LowerLeg -> Paw -> Toes
     """
     # Calculate shoulder/hip position (slightly offset from body center)
     shoulder_pos = body_pos.copy()
-    shoulder_pos[0] = side_offset  # X offset for left/right
+    shoulder_pos[0] = side_offset
 
-    # Leg segments with proper joint positions
-    leg_vector = paw_pos - shoulder_pos
-    leg_length = np.linalg.norm(leg_vector)
+    # Use actual knee position - derive upper/lower segments from it
+    # Upper segment: shoulder -> knee
+    # Lower segment: knee -> just above paw
+    paw_top = knee_pos + (paw_pos - knee_pos) * 0.85
 
-    # Joint positions as fractions of leg length
-    upper_pos = shoulder_pos + leg_vector * 0.35
-    lower_pos = shoulder_pos + leg_vector * 0.65
-    paw_top = shoulder_pos + leg_vector * 0.92
-
-    # Add slight forward/backward bend to joints for natural pose
-    # Front legs (elbows) bend backward (-Z), back legs (knees) bend forward (+Z)
     if is_front:
-        lower_pos[2] -= leg_length * 0.05  # Elbow bends backward
         parent = "Spine1"
-        bone_names = [f"{prefix}Shoulder", f"{prefix}UpperArm", f"{prefix}LowerArm", f"{prefix}Paw", f"{prefix}Toes"]
+        bone_names = [f"{prefix}Shoulder", f"{prefix}UpperArm", f"{prefix}LowerArm", f"{prefix}Paw"]
     else:
-        lower_pos[2] += leg_length * 0.05  # Knee bends forward
         parent = "Hips"
-        bone_names = [f"{prefix}Hip", f"{prefix}UpperLeg", f"{prefix}LowerLeg", f"{prefix}Paw", f"{prefix}Toes"]
+        bone_names = [f"{prefix}Hip", f"{prefix}UpperLeg", f"{prefix}LowerLeg", f"{prefix}Paw"]
 
     # Toes extend forward from paw (+Z is forward)
     toes_end = paw_pos.copy()
-    toes_end[2] += 0.08  # Forward in +Z direction
+    toes_end[2] += 0.08
     toes_end[1] = paw_pos[1]
 
-    _create_bone(bone_names[0], parent, shoulder_pos, upper_pos, bones_by_name)
-    _create_bone(bone_names[1], bone_names[0], upper_pos, lower_pos, bones_by_name, connected=True)
-    _create_bone(bone_names[2], bone_names[1], lower_pos, paw_top, bones_by_name, connected=True)
-    _create_bone(bone_names[3], bone_names[2], paw_top, paw_pos, bones_by_name, connected=True)
-    _create_bone(bone_names[4], bone_names[3], paw_pos, toes_end, bones_by_name, connected=True)
+    _create_bone(bone_names[0], parent, shoulder_pos, knee_pos, bones_by_name)
+    _create_bone(bone_names[1], bone_names[0], knee_pos, paw_top, bones_by_name, connected=True)
+    _create_bone(bone_names[2], bone_names[1], paw_top, paw_pos, bones_by_name, connected=True)
+    _create_bone(bone_names[3], bone_names[2], paw_pos, toes_end, bones_by_name, connected=True)
 
 
 def _generate_humanoid_skeleton(lm: Dict[str, np.ndarray]) -> Skeleton:
@@ -244,7 +246,8 @@ def _generate_humanoid_skeleton(lm: Dict[str, np.ndarray]) -> Skeleton:
     bones_by_name: Dict[str, Bone] = {}
 
     # Ensure all required landmarks exist
-    required = ["Hips", "Chest", "Head", "LeftHand", "RightHand", "LeftFoot", "RightFoot"]
+    required = ["Hips", "Chest", "Head", "LeftElbow", "RightElbow", "LeftHand", "RightHand",
+                "LeftKnee", "RightKnee", "LeftFoot", "RightFoot"]
     for name in required:
         if name not in lm:
             raise ValueError(f"Missing required landmark: {name}")
@@ -263,70 +266,68 @@ def _generate_humanoid_skeleton(lm: Dict[str, np.ndarray]) -> Skeleton:
     _create_bone("Neck", "Chest", neck_pos, neck_pos + (head_pos - neck_pos) * 0.5, bones_by_name, connected=True)
     _create_bone("Head", "Neck", neck_pos + (head_pos - neck_pos) * 0.5, head_pos, bones_by_name, connected=True)
 
-    # === LEFT ARM (Chest -> LeftHand) ===
-    _add_humanoid_arm_v2(bones_by_name, "Left", chest_pos, lm["LeftHand"], side_offset=0.15)
+    # === LEFT ARM (Chest -> LeftElbow -> LeftHand) ===
+    _add_humanoid_arm(bones_by_name, "Left", chest_pos, lm["LeftElbow"], lm["LeftHand"], side_offset=0.15)
 
-    # === RIGHT ARM (Chest -> RightHand) ===
-    _add_humanoid_arm_v2(bones_by_name, "Right", chest_pos, lm["RightHand"], side_offset=-0.15)
+    # === RIGHT ARM (Chest -> RightElbow -> RightHand) ===
+    _add_humanoid_arm(bones_by_name, "Right", chest_pos, lm["RightElbow"], lm["RightHand"], side_offset=-0.15)
 
-    # === LEFT LEG (Hips -> LeftFoot) ===
-    _add_humanoid_leg_v2(bones_by_name, "Left", hips_pos, lm["LeftFoot"], side_offset=0.1)
+    # === LEFT LEG (Hips -> LeftKnee -> LeftFoot) ===
+    _add_humanoid_leg(bones_by_name, "Left", hips_pos, lm["LeftKnee"], lm["LeftFoot"], side_offset=0.1)
 
-    # === RIGHT LEG (Hips -> RightFoot) ===
-    _add_humanoid_leg_v2(bones_by_name, "Right", hips_pos, lm["RightFoot"], side_offset=-0.1)
+    # === RIGHT LEG (Hips -> RightKnee -> RightFoot) ===
+    _add_humanoid_leg(bones_by_name, "Right", hips_pos, lm["RightKnee"], lm["RightFoot"], side_offset=-0.1)
 
     skeleton = Skeleton(root=root_bone, bones=bones_by_name, character_type=CharacterType.HUMANOID)
 
-    logger.info(f"Generated humanoid skeleton with {len(bones_by_name)} bones from 7 landmarks")
+    logger.info(f"Generated humanoid skeleton with {len(bones_by_name)} bones from 11 landmarks")
     return skeleton
 
 
-def _add_humanoid_arm_v2(
+def _add_humanoid_arm(
     bones_by_name: Dict[str, Bone],
     side: str,
     chest: np.ndarray,
+    elbow: np.ndarray,
     hand: np.ndarray,
     side_offset: float,
 ) -> None:
-    """Add humanoid arm bone chain."""
+    """Add humanoid arm bone chain using actual elbow landmark."""
     shoulder = chest.copy()
     shoulder[0] = side_offset
     shoulder[1] = chest[1] - 0.05
 
-    arm_vector = hand - shoulder
-    upper_arm_end = shoulder + arm_vector * 0.45
-    forearm_end = shoulder + arm_vector * 0.85
+    # Use actual elbow position from landmark instead of guessing
+    forearm_end = elbow + (hand - elbow) * 0.8
 
     _create_bone(f"{side}Shoulder", "Chest", shoulder - np.array([side_offset * 0.5, 0, 0]), shoulder, bones_by_name)
-    _create_bone(f"{side}Arm", f"{side}Shoulder", shoulder, upper_arm_end, bones_by_name, connected=True)
-    _create_bone(f"{side}ForeArm", f"{side}Arm", upper_arm_end, forearm_end, bones_by_name, connected=True)
+    _create_bone(f"{side}Arm", f"{side}Shoulder", shoulder, elbow, bones_by_name, connected=True)
+    _create_bone(f"{side}ForeArm", f"{side}Arm", elbow, forearm_end, bones_by_name, connected=True)
     _create_bone(f"{side}Hand", f"{side}ForeArm", forearm_end, hand, bones_by_name, connected=True)
 
 
-def _add_humanoid_leg_v2(
+def _add_humanoid_leg(
     bones_by_name: Dict[str, Bone],
     side: str,
     hips: np.ndarray,
+    knee: np.ndarray,
     foot: np.ndarray,
     side_offset: float,
 ) -> None:
-    """Add humanoid leg bone chain."""
+    """Add humanoid leg bone chain using actual knee landmark."""
     hip_joint = hips.copy()
     hip_joint[0] = side_offset
 
-    leg_vector = foot - hip_joint
-    upper_leg_end = hip_joint + leg_vector * 0.45
-    lower_leg_end = hip_joint + leg_vector * 0.9
+    # Use actual knee position from landmark instead of guessing
+    lower_leg_end = knee + (foot - knee) * 0.85
 
-    upper_leg_end[2] += 0.02
-
-    _create_bone(f"{side}UpLeg", "Hips", hip_joint, upper_leg_end, bones_by_name)
-    _create_bone(f"{side}Leg", f"{side}UpLeg", upper_leg_end, lower_leg_end, bones_by_name, connected=True)
+    _create_bone(f"{side}UpLeg", "Hips", hip_joint, knee, bones_by_name)
+    _create_bone(f"{side}Leg", f"{side}UpLeg", knee, lower_leg_end, bones_by_name, connected=True)
     _create_bone(f"{side}Foot", f"{side}Leg", lower_leg_end, foot, bones_by_name, connected=True)
 
     # Toes extend forward (+Z is forward)
     toes_end = foot.copy()
-    toes_end[2] += 0.1  # Forward in +Z direction
+    toes_end[2] += 0.1
     toes_end[1] = foot[1]
     _create_bone(f"{side}ToeBase", f"{side}Foot", foot, toes_end, bones_by_name, connected=True)
 

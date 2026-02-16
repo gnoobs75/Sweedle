@@ -156,26 +156,6 @@ export async function generateLODs(params: GenerateLODsParams): Promise<LODResul
 }
 
 /**
- * Convert asset to different format
- */
-export async function convertFormat(
-  assetId: string,
-  targetFormat: 'glb' | 'obj' | 'fbx'
-): Promise<{ downloadUrl: string }> {
-  const response = await apiClient.post<{ download_url: string }>(
-    '/export/convert',
-    {
-      asset_id: assetId,
-      target_format: targetFormat,
-    }
-  );
-
-  return {
-    downloadUrl: response.download_url,
-  };
-}
-
-/**
  * Validate engine project path
  */
 export async function validateProjectPath(
@@ -415,6 +395,49 @@ export async function exportSkinnedGLB(
 /**
  * Regenerate thumbnail for an asset
  */
+/**
+ * Convert asset to a different format
+ */
+export type ExportFormat = 'stl' | 'obj' | 'ply' | 'off';
+
+export async function convertFormat(params: {
+  assetId: string;
+  targetFormat: ExportFormat;
+  binary?: boolean;
+}): Promise<{
+  success: boolean;
+  assetId: string;
+  originalFormat: string;
+  targetFormat: string;
+  outputPath: string;
+  fileSizeBytes: number;
+  error?: string;
+}> {
+  const response = await apiClient.post<{
+    success: boolean;
+    asset_id: string;
+    original_format: string;
+    target_format: string;
+    output_path: string | null;
+    file_size_bytes: number;
+    error?: string;
+  }>('/export/convert-format', {
+    asset_id: params.assetId,
+    target_format: params.targetFormat,
+    binary: params.binary ?? true,
+  });
+
+  return {
+    success: response.success,
+    assetId: response.asset_id,
+    originalFormat: response.original_format,
+    targetFormat: response.target_format,
+    outputPath: response.output_path || '',
+    fileSizeBytes: response.file_size_bytes,
+    error: response.error,
+  };
+}
+
 export async function regenerateThumbnail(
   assetId: string,
   options?: {

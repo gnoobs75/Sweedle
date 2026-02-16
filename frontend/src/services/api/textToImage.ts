@@ -33,8 +33,7 @@ export interface TextToImageResponse {
  * Get available style presets for text-to-image generation.
  */
 export async function getStylePresets(): Promise<StylePreset[]> {
-  const response = await apiClient.get<StylePreset[]>('/generation/text-to-image/presets');
-  return response.data;
+  return apiClient.get<StylePreset[]>('/generation/text-to-image/presets');
 }
 
 /**
@@ -62,11 +61,10 @@ export async function generateImageFromText(
     formData.append('guidance_scale', request.guidance_scale.toString());
   }
 
-  const response = await apiClient.post<TextToImageResponse>(
+  return apiClient.post<TextToImageResponse>(
     '/generation/text-to-image',
     formData
   );
-  return response.data;
 }
 
 /**

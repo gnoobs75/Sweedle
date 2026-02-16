@@ -1,11 +1,12 @@
 /**
  * RiggingStage - Stage 3: Landmark-based skeleton rigging
  *
- * Users position 8 key landmark points and the system generates
+ * Users first choose character type (humanoid/quadruped), then
+ * position 8 key landmark points and the system generates
  * the full skeleton with all bones between them.
  */
 
-import { useEffect, useCallback } from 'react';
+import { useCallback } from 'react';
 import { useWorkflowStore } from '../../../stores/workflowStore';
 import { useRiggingStore } from '../../../stores/riggingStore';
 import { LandmarkEditor } from '../../rigging/LandmarkEditor';
@@ -16,6 +17,8 @@ export function RiggingStage() {
     skeletonData,
     detectedType,
     showSkeleton,
+    characterType,
+    setCharacterType,
     isLandmarkMode,
     enterLandmarkMode,
     exitLandmarkMode,
@@ -26,12 +29,11 @@ export function RiggingStage() {
   const isSkipped = status === 'skipped';
   const isPending = status === 'pending';
 
-  // Auto-enter landmark mode when stage becomes active
-  useEffect(() => {
-    if (isPending && !isLandmarkMode) {
-      enterLandmarkMode();
-    }
-  }, [isPending, isLandmarkMode, enterLandmarkMode]);
+  // User selects character type, then enter landmark mode
+  const handleSelectType = useCallback((type: 'humanoid' | 'quadruped') => {
+    setCharacterType(type);
+    enterLandmarkMode();
+  }, [setCharacterType, enterLandmarkMode]);
 
   // Handle landmark complete - mark stage as completed
   const handleLandmarkComplete = useCallback(() => {
@@ -132,11 +134,47 @@ export function RiggingStage() {
         </div>
       )}
 
-      {/* Pending but not in landmark mode yet - show brief loading */}
+      {/* Pending - show character type selection before landmark mode */}
       {isPending && !isLandmarkMode && (
-        <div className="flex items-center justify-center py-8">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500"></div>
-          <span className="ml-3 text-gray-400">Loading landmarks...</span>
+        <div className="space-y-4">
+          <p className="text-sm text-gray-400">
+            Choose the type that best matches your model. This determines how landmarks and bones are placed.
+          </p>
+
+          <div className="grid grid-cols-2 gap-3">
+            {/* Humanoid option */}
+            <button
+              onClick={() => handleSelectType('humanoid')}
+              className="group p-4 bg-gray-800/60 border border-gray-700 rounded-xl
+                         hover:border-purple-500 hover:bg-purple-900/20 transition-all text-left"
+            >
+              <div className="text-3xl mb-2">🧍</div>
+              <h4 className="text-sm font-semibold text-white group-hover:text-purple-300">Humanoid</h4>
+              <p className="text-xs text-gray-500 mt-1">
+                Bipeds, humans, robots, characters that stand upright on two legs
+              </p>
+            </button>
+
+            {/* Quadruped option */}
+            <button
+              onClick={() => handleSelectType('quadruped')}
+              className="group p-4 bg-gray-800/60 border border-gray-700 rounded-xl
+                         hover:border-purple-500 hover:bg-purple-900/20 transition-all text-left"
+            >
+              <div className="text-3xl mb-2">🐕</div>
+              <h4 className="text-sm font-semibold text-white group-hover:text-purple-300">Quadruped</h4>
+              <p className="text-xs text-gray-500 mt-1">
+                Animals, four-legged creatures, dogs, cats, horses, dragons
+              </p>
+            </button>
+          </div>
+
+          <button
+            onClick={() => setStageStatus('rigging', 'skipped')}
+            className="w-full py-2 text-sm text-gray-500 hover:text-gray-300 transition-colors"
+          >
+            Skip Rigging
+          </button>
         </div>
       )}
 

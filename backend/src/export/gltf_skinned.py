@@ -565,7 +565,16 @@ class GLTFSkinnedExporter:
                     channels=channels,
                 )
                 self.gltf.animations.append(animation)
-                logger.info(f"Added animation '{anim_name}' with {len(channels)} channels")
+                # Log first rotation values to verify animations differ
+                for track in tracks[:1]:
+                    rots = track.get("rotations")
+                    if rots and len(rots) > 0:
+                        logger.info(f"Added animation '{anim_name}' with {len(channels)} channels, "
+                                    f"first bone='{track.get('bone_name')}', "
+                                    f"first rot={rots[0]}, last rot={rots[-1]}")
+                        break
+                else:
+                    logger.info(f"Added animation '{anim_name}' with {len(channels)} channels")
 
     def _add_accessor(
         self,
