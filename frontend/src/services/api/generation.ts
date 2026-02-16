@@ -11,6 +11,8 @@ import type {
   Job,
 } from '../../types';
 
+export type { GenerationParameters };
+
 interface GenerateFromImageParams {
   file: File;
   name?: string;

@@ -163,7 +163,7 @@ export function AssetDetails({ asset, onClose, className }: AssetDetailsProps) {
     // Load skeleton if rigged - this enables animation playback in ViewerToolbar
     if (asset.isRigged && asset.riggingData) {
       try {
-        const skeleton = asset.riggingData as SkeletonData;
+        const skeleton = asset.riggingData as unknown as SkeletonData;
         setSkeletonData(skeleton);
         if (asset.characterType) {
           setCharacterType(asset.characterType as 'humanoid' | 'quadruped');

@@ -11,6 +11,6 @@ export * from './export';
 export * from './folders';
 export * from './mesh';
 export * from './materials';
-export * from './mixamo';
+
 export * from './variants';
 export * from './templates';
