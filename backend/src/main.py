@@ -123,12 +123,16 @@ app.mount(
 async def health_check():
     """Health check endpoint."""
     from src.core.device import get_device_info
+    from src.shipbuilder import router as shipbuilder_router_module
 
     queue_status = app.state.job_queue.get_status() if app.state.job_queue else {}
     device_info = get_device_info()
+    model_loaded = shipbuilder_router_module._pipeline is not None
 
     return {
-        "status": "healthy",
+        "status": "ok",
+        "model": "trellis2-4b",
+        "model_loaded": model_loaded,
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
         "worker_running": app.state.worker.is_running if app.state.worker else False,
@@ -361,6 +365,7 @@ from src.mesh.router import router as mesh_router
 from src.materials.router import router as materials_router
 from src.variants.router import router as variants_router
 from src.templates.router import router as templates_router
+from src.shipbuilder.router import router as shipbuilder_router
 
 app.include_router(generation_router, prefix="/api/generation", tags=["Generation"])
 app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
@@ -375,6 +380,7 @@ app.include_router(mesh_router, prefix="/api", tags=["Mesh"])
 app.include_router(materials_router, prefix="/api", tags=["Materials"])
 app.include_router(variants_router, prefix="/api/variants", tags=["Variants"])
 app.include_router(templates_router, prefix="/api/workflow", tags=["Templates"])
+app.include_router(shipbuilder_router, prefix="/api/shipbuilder", tags=["Ship Builder"])
 
 
 # Serve frontend static files

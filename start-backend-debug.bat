@@ -133,6 +133,10 @@ echo Starting backend with full output...
 echo ----------------------------------------
 echo.
 
+:: TRELLIS.2 required environment variables
+set OPENCV_IO_ENABLE_OPENEXR=1
+set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 cd backend
 venv\Scripts\python.exe -m uvicorn src.main:app --host 127.0.0.1 --port 8001
 
