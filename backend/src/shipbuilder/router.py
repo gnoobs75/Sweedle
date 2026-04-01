@@ -16,6 +16,10 @@ from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
+# Windows compatibility: use sdpa attention (no flash_attn)
+os.environ.setdefault("ATTN_BACKEND", "sdpa")
+os.environ.setdefault("SPARSE_ATTN_BACKEND", "sdpa")
+
 from fastapi import APIRouter, HTTPException
 from PIL import Image
 
