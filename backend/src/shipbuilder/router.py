@@ -105,11 +105,13 @@ def _decode_image(image_base64: str) -> Image.Image:
     return Image.open(BytesIO(img_bytes)).convert("RGBA")
 
 
-def _run_trellis(pipeline, image: Image.Image, seed: Optional[int], sampler_steps: int):
+def _run_trellis(pipeline, image: Image.Image, seed: Optional[int], sampler_steps: int, pipeline_type: str = '512'):
     """Run TRELLIS.2 inference. Returns mesh object."""
     kwargs = {
         "sparse_structure_sampler_params": {"steps": sampler_steps},
-        "slat_sampler_params": {"steps": sampler_steps},
+        "shape_slat_sampler_params": {"steps": sampler_steps},
+        "tex_slat_sampler_params": {"steps": sampler_steps},
+        "pipeline_type": pipeline_type,
     }
     if seed is not None:
         kwargs["seed"] = seed
@@ -247,7 +249,7 @@ async def generate_ship(request: ShipGenerateRequest):
 
     try:
         logger.info(f"{log_prefix} Running TRELLIS.2 inference (resolution={resolution})...")
-        mesh = _run_trellis(pipeline, image, request.seed, request.sampler_steps)
+        mesh = _run_trellis(pipeline, image, request.seed, request.sampler_steps, pipeline_type=str(resolution))
 
         if torch.cuda.is_available():
             vram_peak = torch.cuda.max_memory_allocated(0) / 1e9
@@ -268,7 +270,7 @@ async def generate_ship(request: ShipGenerateRequest):
 
             try:
                 pipeline = _load_pipeline()
-                mesh = _run_trellis(pipeline, image, request.seed, request.sampler_steps)
+                mesh = _run_trellis(pipeline, image, request.seed, request.sampler_steps, pipeline_type=str(resolution))
                 if torch.cuda.is_available():
                     vram_peak = torch.cuda.max_memory_allocated(0) / 1e9
             except RuntimeError as e2:
