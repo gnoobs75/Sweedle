@@ -15,7 +15,7 @@ class ShipGenerateRequest(BaseModel):
     # TRELLIS.2 generation settings
     resolution: int = Field(default=512, description="Output resolution: 512 (~16GB VRAM, ~10s) or 1024 (~22GB VRAM, ~34s)")
     sampler_steps: int = Field(default=12, description="Number of sampler steps for structure and latent generation")
-    decimation_target: int = Field(default=30000, description="Target face count for mesh decimation")
+    decimation_target: int = Field(default=100000, description="Target face count for mesh decimation")
     texture_size: int = Field(default=1024, description="PBR texture atlas resolution in pixels")
     seed: Optional[int] = Field(default=None, description="Random seed for reproducibility")
     pbr: bool = Field(default=True, description="Include PBR materials (always true for TRELLIS.2)")

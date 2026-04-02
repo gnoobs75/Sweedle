@@ -11,6 +11,7 @@ import logging
 import os
 import subprocess
 import time
+import traceback
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -42,8 +43,9 @@ router = APIRouter()
 _pipeline = None
 
 # VRAM thresholds (GB free required)
-VRAM_THRESHOLD_512 = 16.0
-VRAM_THRESHOLD_1024 = 22.0
+# TRELLIS.2-4B actual usage: ~3GB at 512, ~8GB at 1024
+VRAM_THRESHOLD_512 = 6.0
+VRAM_THRESHOLD_1024 = 12.0
 
 
 def _get_vram_info() -> dict:
@@ -68,7 +70,14 @@ def _get_vram_info() -> dict:
 
 
 def _load_pipeline():
-    """Lazy-load TRELLIS.2-4B pipeline. Called on first /generate request."""
+    """Lazy-load TRELLIS.2-4B pipeline. Called on first /generate request.
+
+    Redirects stdout/stderr to devnull during loading because tqdm (used by
+    transformers/safetensors weight loading) calls sys.stderr.flush() which
+    crashes with [Errno 22] when Electron's piped handles are the stdio.
+    """
+    import sys
+
     global _pipeline
     if _pipeline is not None:
         return _pipeline
@@ -76,8 +85,21 @@ def _load_pipeline():
     from trellis2.pipelines import Trellis2ImageTo3DPipeline
 
     logger.info("Loading TRELLIS.2-4B pipeline...")
-    _pipeline = Trellis2ImageTo3DPipeline.from_pretrained("microsoft/TRELLIS.2-4B")
-    _pipeline.cuda()
+
+    # Redirect stdout/stderr — tqdm flush crashes on Electron's piped handles
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    devnull = open(os.devnull, 'w')
+    sys.stdout = devnull
+    sys.stderr = devnull
+    try:
+        _pipeline = Trellis2ImageTo3DPipeline.from_pretrained("microsoft/TRELLIS.2-4B")
+        _pipeline.cuda()
+    finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+        devnull.close()
+
     logger.info("TRELLIS.2-4B pipeline loaded and moved to CUDA")
     return _pipeline
 
@@ -105,8 +127,67 @@ def _decode_image(image_base64: str) -> Image.Image:
     return Image.open(BytesIO(img_bytes)).convert("RGBA")
 
 
+def _remove_background(image: Image.Image) -> Image.Image:
+    """Remove background using rembg u2net.
+
+    TRELLIS.2's built-in rembg (RMBG-2.0) is gated on HuggingFace, so we
+    use the standard rembg library with u2net instead. Without background
+    removal, TRELLIS.2 treats the full rectangle as the object.
+    """
+    try:
+        from rembg import remove
+        import numpy as np
+
+        logger.info("Removing background with rembg/u2net...")
+        rgb = image.convert("RGB")
+        result = remove(rgb)
+
+        alpha = np.array(result)[:, :, 3]
+        transparent_pct = (alpha < 128).sum() / alpha.size * 100
+        logger.info(f"Background removal: {transparent_pct:.0f}% transparent")
+        if transparent_pct < 5:
+            logger.warning("Background removal had little effect — image may already be clean")
+
+        result = _crop_to_content(result)
+        return result
+    except Exception as e:
+        logger.warning(f"Background removal failed ({e}), using original image")
+        return image
+
+
+def _crop_to_content(image: Image.Image) -> Image.Image:
+    """Crop RGBA image tightly to non-transparent content."""
+    import numpy as np
+
+    arr = np.array(image)
+    if arr.shape[2] < 4:
+        return image
+
+    alpha = arr[:, :, 3]
+    rows = np.any(alpha > 128, axis=1)
+    cols = np.any(alpha > 128, axis=0)
+    if not rows.any():
+        return image
+
+    rmin, rmax = np.where(rows)[0][[0, -1]]
+    cmin, cmax = np.where(cols)[0][[0, -1]]
+
+    pad = 10
+    rmin = max(0, rmin - pad)
+    rmax = min(arr.shape[0] - 1, rmax + pad)
+    cmin = max(0, cmin - pad)
+    cmax = min(arr.shape[1] - 1, cmax + pad)
+
+    cropped = image.crop((cmin, rmin, cmax + 1, rmax + 1))
+    logger.info(f"Cropped to content: {image.size[0]}x{image.size[1]} -> {cropped.size[0]}x{cropped.size[1]}")
+    return cropped
+
+
 def _run_trellis(pipeline, image: Image.Image, seed: Optional[int], sampler_steps: int, pipeline_type: str = '512'):
     """Run TRELLIS.2 inference. Returns mesh object."""
+    import sys
+    import torch
+
     kwargs = {
         "sparse_structure_sampler_params": {"steps": sampler_steps},
         "shape_slat_sampler_params": {"steps": sampler_steps},
@@ -116,12 +197,39 @@ def _run_trellis(pipeline, image: Image.Image, seed: Optional[int], sampler_step
     if seed is not None:
         kwargs["seed"] = seed
 
-    results = pipeline.run(image, **kwargs)
-    return results[0]
+    logger.info(f"[TRELLIS] Starting pipeline.run(type={pipeline_type}, steps={sampler_steps})...")
+
+    # Clear VRAM between generations to prevent residual tensor contamination
+    torch.cuda.empty_cache()
+    gc.collect()
+    torch.cuda.reset_peak_memory_stats()
+    logger.info(f"[TRELLIS] VRAM cleared before generation ({torch.cuda.memory_allocated(0)/1e9:.1f}GB allocated)")
+
+    # Redirect stdout/stderr — tqdm flush crashes on Electron's piped handles
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    devnull = open(os.devnull, 'w')
+    sys.stdout = devnull
+    sys.stderr = devnull
+    try:
+        results = pipeline.run(image, **kwargs)
+    finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+        devnull.close()
+
+    logger.info("[TRELLIS] Pipeline complete.")
+
+    mesh = results[0]
+    del results
+    torch.cuda.empty_cache()
+    gc.collect()
+
+    return mesh
 
 
 def _export_glb(mesh, output_path: Path, decimation_target: int, texture_size: int):
-    """Export mesh to GLB via o_voxel postprocessing."""
+    """Export mesh to GLB via o_voxel postprocessing, then remove small floating islands."""
     import o_voxel
 
     glb = o_voxel.postprocess.to_glb(
@@ -134,7 +242,7 @@ def _export_glb(mesh, output_path: Path, decimation_target: int, texture_size: i
         aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
         decimation_target=decimation_target,
         texture_size=texture_size,
-        remesh=True,
+        remesh=False,
         verbose=False,
     )
     glb.export(str(output_path), extension_webp=True)
@@ -175,6 +283,27 @@ async def vram_reset():
     }
 
 
+@router.post("/warm-up")
+async def warm_up_pipeline():
+    """Pre-load the TRELLIS.2 pipeline so first generation doesn't pay the load cost."""
+    global _pipeline
+    if _pipeline is not None:
+        return {"ok": True, "status": "already_loaded", "message": "Pipeline already loaded"}
+
+    vram = _get_vram_info()
+    if vram["free_gb"] < VRAM_THRESHOLD_512:
+        return {"ok": False, "status": "insufficient_vram",
+                "message": f"Need {VRAM_THRESHOLD_512}GB free VRAM, have {vram['free_gb']}GB"}
+
+    logger.info("Pre-warming TRELLIS.2 pipeline...")
+    try:
+        _load_pipeline()
+        return {"ok": True, "status": "loaded", "message": "Pipeline loaded and ready"}
+    except Exception as e:
+        logger.error(f"Pipeline warm-up failed: {e}\n{traceback.format_exc()}")
+        return {"ok": False, "status": "error", "message": str(e)}
+
+
 @router.get("/fleet-classes")
 async def list_fleet_classes():
     """List available fleet class configurations."""
@@ -192,8 +321,8 @@ async def generate_ship(request: ShipGenerateRequest):
 
     Flow:
     1. VRAM pre-flight (auto-downgrade 1024->512 if insufficient)
-    2. Decode concept image
-    3. Lazy-load TRELLIS.2 pipeline
+    2. Decode concept image + remove background
+    3. Lazy-load TRELLIS.2 pipeline (synchronous — threading causes [Errno 22] on Windows)
     4. Run inference (with OOM catch + retry at lower res)
     5. Export PBR GLB via o_voxel
     6. Return base64 GLB
@@ -217,7 +346,6 @@ async def generate_ship(request: ShipGenerateRequest):
 
     if vram["free_gb"] < threshold:
         if resolution == 1024 and vram["free_gb"] >= VRAM_THRESHOLD_512:
-            # Auto-downgrade 1024 -> 512
             logger.warning(f"{log_prefix} VRAM {vram['free_gb']}GB < {VRAM_THRESHOLD_1024}GB, downgrading 1024->512")
             resolution = 512
             downgraded = True
@@ -229,18 +357,31 @@ async def generate_ship(request: ShipGenerateRequest):
                 error=f"Insufficient VRAM: {vram['free_gb']}GB free, need {VRAM_THRESHOLD_512}GB. Try /vram-reset first.",
             )
 
-    # Step 2: Decode image
+    # Step 2: Decode image and remove background
     try:
         image = _decode_image(request.image_base64)
         logger.info(f"{log_prefix} Image decoded: {image.size[0]}x{image.size[1]}")
     except Exception as e:
         return ShipGenerateResponse(ok=False, error=f"Invalid image: {e}")
 
-    # Step 3: Load pipeline (lazy)
+    # Step 2b: Remove background — critical for 3D quality
+    image = _remove_background(image)
+
+    # Debug: save what we're feeding to TRELLIS.2 so we can inspect quality
+    try:
+        debug_dir = Path(settings.STORAGE_ROOT) / "exports" / "debug"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        image.save(str(debug_dir / "pre-trellis-input.png"))
+        logger.info(f"{log_prefix} Debug: saved pre-pipeline image to {debug_dir / 'pre-trellis-input.png'}")
+    except Exception as e:
+        logger.warning(f"Could not save debug image: {e}")
+
+    # Step 3: Load pipeline (lazy) — MUST be synchronous
+    # asyncio.to_thread causes [Errno 22] on Windows with Electron's piped stdio
     try:
         pipeline = _load_pipeline()
     except Exception as e:
-        logger.error(f"{log_prefix} Pipeline load failed: {e}")
+        logger.error(f"{log_prefix} Pipeline load failed: {e}\n{traceback.format_exc()}")
         return ShipGenerateResponse(ok=False, error=f"Failed to load TRELLIS.2 pipeline: {e}")
 
     # Step 4: Run inference with OOM handling
@@ -260,7 +401,6 @@ async def generate_ship(request: ShipGenerateRequest):
 
         logger.error(f"{log_prefix} CUDA OOM at resolution={resolution}")
 
-        # If we were at 1024, retry at 512
         if resolution == 1024:
             logger.info(f"{log_prefix} Retrying at 512 after OOM...")
             _unload_pipeline()
@@ -280,12 +420,11 @@ async def generate_ship(request: ShipGenerateRequest):
                     return ShipGenerateResponse(ok=False, error="GPU out of memory at both 1024 and 512. Free VRAM and retry.")
                 raise
         else:
-            # Already at 512 and OOM
             _unload_pipeline()
             return ShipGenerateResponse(ok=False, error="GPU out of memory at 512. Free VRAM and retry.")
 
     except Exception as e:
-        logger.error(f"{log_prefix} Inference failed: {e}")
+        logger.error(f"{log_prefix} Inference failed: {e}\n{traceback.format_exc()}")
         return ShipGenerateResponse(ok=False, error=f"TRELLIS.2 inference failed: {e}")
 
     # Step 5: Export GLB
@@ -299,7 +438,7 @@ async def generate_ship(request: ShipGenerateRequest):
     try:
         _export_glb(mesh, output_path, request.decimation_target, request.texture_size)
     except Exception as e:
-        logger.error(f"{log_prefix} GLB export failed: {e}")
+        logger.error(f"{log_prefix} GLB export failed: {e}\n{traceback.format_exc()}")
         return ShipGenerateResponse(ok=False, error=f"GLB export failed: {e}")
 
     # Step 6: Read GLB and return base64
@@ -307,7 +446,6 @@ async def generate_ship(request: ShipGenerateRequest):
     glb_base64 = base64.b64encode(glb_bytes).decode("utf-8")
     glb_size_kb = len(glb_bytes) / 1024
 
-    # Count verts/faces from the mesh
     vertex_count = len(mesh.vertices) if hasattr(mesh, 'vertices') else 0
     face_count = len(mesh.faces) if hasattr(mesh, 'faces') else 0
 
